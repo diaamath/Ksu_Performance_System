@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
 :root{
   box-sizing:border-box;
@@ -240,9 +241,9 @@ textarea{resize:vertical;min-height:76px;}
 
 <script>
 /* =======================================================================
-   نظام تقييم ومتابعة الأداء الأكاديمي — جامعة الملك سعود
-   السنة الأولى المشتركة — قسم العلوم الأساسية
-   ======================================================================= */
+    نظام تقييم ومتابعة الأداء الأكاديمي — جامعة الملك سعود
+    السنة الأولى المشتركة — قسم العلوم الأساسية
+    ======================================================================= */
 
 const ICON = {
   dashboard:'<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
@@ -415,7 +416,7 @@ function seedData(){
   return {
     courses, sections, instructors, students, users, auditLogs,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-    meta:{ version:'2.2.0', seededAt: new Date().toISOString() }
+    meta:{ version:'2.3.0', seededAt: new Date().toISOString() }
   };
 }
 function weightedPick(pairs){ const r=rnd(); let acc=0; for(const [k,w] of pairs){acc+=w; if(r<=acc) return k;} return pairs[pairs.length-1][0]; }
@@ -652,6 +653,18 @@ function breadcrumb(){
   return `<div class="breadcrumb">${S.user.role==='admin'?'لوحة الإدارة':'لوحة المدرس'} <span>/</span> ${meta.title}</div>
   <div class="page-head"><div><h1 class="page-title">${meta.title}</h1><p class="page-desc">${meta.desc}</p></div><div id="pageActions"></div></div>`;
 }
+function pageActionsForRoute(){
+  if(S.route==='students') return `
+    <button type="button" class="btn btn-primary" id="importExcelBtn" style="background:linear-gradient(135deg,#059669,#047857);">${ICON.upload} استيراد Excel (إعادة تهيئة شاملة)</button>
+    <button type="button" class="btn btn-outline" id="exportStudentsBtn">${ICON.download} تصدير Excel</button>
+    <button type="button" class="btn btn-danger btn-sm" id="deleteAllStudentsBtn" style="padding:10px 12px;">${ICON.trash} حذف الكل</button>
+    <button type="button" class="btn btn-outline" id="addStudentBtn">${ICON.plus} إضافة طالب</button>
+    <input type="file" id="excelFileInput" accept=".csv,.txt,.xlsx,.xls" style="display:none">`;
+  if(S.route==='courses') return `<button type="button" class="btn btn-primary" id="addCourseBtn">${ICON.plus} إضافة مقرر</button>`;
+  if(S.route==='sections') return `<button type="button" class="btn btn-primary" id="addSectionBtn">${ICON.plus} إضافة شعبة</button>`;
+  if(S.route==='users') return `<button type="button" class="btn btn-primary" id="addUserBtn">${ICON.plus} إضافة مستخدم</button>`;
+  return '';
+}
 function renderRoute(){
   const c = document.getElementById('content');
   let html = breadcrumb();
@@ -666,6 +679,8 @@ function renderRoute(){
   else if(S.route==='audit') html += auditView();
   else if(S.route==='settings') html += settingsView();
   c.innerHTML = html;
+  const pageActions = document.getElementById('pageActions');
+  if(pageActions) pageActions.innerHTML = pageActionsForRoute();
   afterRouteRender();
 }
 
@@ -982,17 +997,12 @@ function coursesView(){
       </div>
     </div>`;
   }).join('<div style="height:14px;"></div>');
-  setTimeout(()=>{
-    const pa = document.getElementById('pageActions');
-    if(pa) pa.innerHTML = `<button class="btn btn-primary" id="addCourseBtn">${ICON.plus} إضافة مقرر</button>`;
-  },0);
   return rows;
 }
 function miniStat(label,val){ return `<div style="background:var(--surface-2);border-radius:10px;padding:10px 12px;"><div style="font-family:Cairo;font-weight:800;font-size:16px;">${val}</div><div style="font-size:11px;color:var(--text-muted);">${label}</div></div>`; }
 
 /* ================================ SECTIONS ================================ */
 function sectionsView(){
-  setTimeout(()=>{ const pa=document.getElementById('pageActions'); if(pa) pa.innerHTML = `<button class="btn btn-primary" id="addSectionBtn">${ICON.plus} إضافة شعبة</button>`; },0);
   return `<div class="card"><div class="scrollx"><table class="responsive-cards">
     <thead><tr><th>الشعبة</th><th>المقرر</th><th>المدرس</th><th>الفصل الدراسي</th><th>عدد الطلبة</th><th>الحالة</th><th></th></tr></thead>
     <tbody>${DB.data.sections.map(s=>{
@@ -1029,18 +1039,6 @@ function studentsView(){
   const pageSize=10; const totalPages=Math.max(1,Math.ceil(list.length/pageSize));
   S.studentPage = Math.min(S.studentPage,totalPages);
   const pageList = list.slice((S.studentPage-1)*pageSize, S.studentPage*pageSize);
-
-  setTimeout(()=>{
-    const pa=document.getElementById('pageActions');
-    if(pa) {
-      pa.innerHTML = `
-        <button class="btn btn-outline" id="importExcelBtn">${ICON.upload} استيراد ملف (CSV/Excel)</button>
-        <button class="btn btn-outline" id="exportStudentsBtn">${ICON.download} تصدير Excel</button>
-        <button class="btn btn-danger btn-sm" id="deleteAllStudentsBtn" style="padding:10px 12px;">${ICON.trash} حذف الكل</button>
-        <button class="btn btn-primary" id="addStudentBtn">${ICON.plus} إضافة طالب</button>
-        <input type="file" id="excelFileInput" accept=".csv,.txt,.xlsx,.xls" style="display:none">`;
-    }
-  },0);
 
   const sectionOptions = inst? '' : `<select id="filterSection"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${courseOf(s.courseId).name} — شعبة ${s.number}</option>`).join('')}</select>`;
 
@@ -1417,7 +1415,6 @@ function fullCoursesReport(){
 
 /* ================================ USERS ================================ */
 function usersView(){
-  setTimeout(()=>{ const pa=document.getElementById('pageActions'); if(pa) pa.innerHTML = `<button class="btn btn-primary" id="addUserBtn">${ICON.plus} إضافة مستخدم</button>`; },0);
   return `<div class="card"><div class="scrollx"><table class="responsive-cards">
     <thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th><th>المقرر/الشعبة</th><th>الحالة</th><th>آخر دخول</th><th></th></tr></thead>
     <tbody>${DB.data.users.map(u=>{
@@ -1527,6 +1524,34 @@ function afterRouteRender(){
       options: baseChartOpts({y:{beginAtZero:true,max:100}, plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10, font:{size:11}}}}})
     });
   }
+  /* Fallback: keep the comparison chart visible even if Chart.js CDN is unavailable. */
+  if(cmpEl && typeof Chart==='undefined'){
+    const ctx=cmpEl.getContext('2d');
+    const rect=cmpEl.getBoundingClientRect();
+    const dpr=window.devicePixelRatio||1;
+    const w=Math.max(300,Math.round(rect.width)), h=Math.max(220,Math.round(rect.height));
+    cmpEl.width=w*dpr; cmpEl.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+    const pad={l:42,r:16,t:16,b:62}, cw=w-pad.l-pad.r, ch=h-pad.t-pad.b;
+    ctx.font='11px Cairo, Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--border').trim()||'#CBD5E1';
+    ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';
+    for(let v=0;v<=100;v+=20){
+      const y=pad.t+ch-(v/100)*ch; ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cw,y); ctx.stroke();
+      ctx.fillText(v+'%',pad.l-18,y);
+    }
+    const colors=[statusColor('green'),statusColor('yellow'),statusColor('red'),statusColor('gray')];
+    const vals=rows.map(r=>[r.greenPct,r.yellowPct,r.redPct,r.grayPct]);
+    const groupW=cw/Math.max(1,labels.length), barW=Math.min(16,groupW/6), gap=3;
+    labels.forEach((label,i)=>{
+      const start=pad.l+i*groupW+(groupW-(4*barW+3*gap))/2;
+      vals[i].forEach((v,j)=>{ const bh=(v/100)*ch, x=start+j*(barW+gap), y=pad.t+ch-bh; ctx.fillStyle=colors[j]; ctx.fillRect(x,y,barW,bh); });
+      ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';
+      ctx.fillText(label,pad.l+i*groupW+groupW/2,pad.t+ch+20);
+    });
+    const legend=[['أخضر',colors[0]],['أصفر',colors[1]],['أحمر',colors[2]],['رمادي',colors[3]]];
+    let lx=pad.l; legend.forEach(([name,color])=>{ctx.fillStyle=color;ctx.fillRect(lx,h-28,10,10);ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';ctx.fillText(name,lx+25,h-23);lx+=72;});
+  }
   const frEl = document.getElementById('chartFullReport');
   if(frEl){
     const labels = DB.data.courses.map(c=>c.name);
@@ -1538,6 +1563,74 @@ function afterRouteRender(){
       {label:'رمادي', data:rows.map(r=>r.gray), backgroundColor: statusColor('gray',.85), borderRadius:6},
     ]}, options: baseChartOpts({y:{beginAtZero:true}, plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,font:{size:11}}}}}) });
   }
+}
+
+function openSectionForm(id){
+  const editing=!!id;
+  const sec=editing ? DB.data.sections.find(x=>x.id===id) : {id:null,courseId:DB.data.courses[0]?.id||'',number:'',instructorId:DB.data.instructors[0]?.id||'',semester:'الأول',year:'1447هـ',status:'active'};
+  if(!sec){toast('تعذر العثور على الشعبة','error');return;}
+  const ov=document.createElement('div'); ov.className='overlay';
+  ov.innerHTML=`<div class="modal">
+    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:15px;">${editing?'تعديل الشعبة':'إضافة شعبة جديدة'}</h3><button type="button" class="icon-btn" id="sf_close">${ICON.x}</button></div>
+    <div class="modal-body">
+      <div class="grid g-2">
+        <div class="field"><label>المقرر</label><select id="sf_course">${DB.data.courses.map(c=>`<option value="${c.id}" ${sec.courseId===c.id?'selected':''}>${c.name} — ${c.code}</option>`).join('')}</select></div>
+        <div class="field"><label>رقم الشعبة</label><input id="sf_number" value="${sec.number||''}" placeholder="مثال: 101"></div>
+        <div class="field"><label>المدرس</label><select id="sf_instructor">${DB.data.instructors.map(i=>`<option value="${i.id}" ${sec.instructorId===i.id?'selected':''}>${i.name}</option>`).join('')}</select></div>
+        <div class="field"><label>الفصل الدراسي</label><input id="sf_semester" value="${sec.semester||'الأول'}"></div>
+        <div class="field"><label>العام</label><input id="sf_year" value="${sec.year||'1447هـ'}"></div>
+        <div class="field"><label>الحالة</label><select id="sf_status"><option value="active" ${sec.status==='active'?'selected':''}>نشطة</option><option value="inactive" ${sec.status==='inactive'?'selected':''}>غير نشطة</option></select></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button type="button" class="btn btn-outline" id="sf_cancel">إلغاء</button><button type="button" class="btn btn-primary" id="sf_save">${ICON.check} حفظ</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  ov.querySelector('#sf_close').onclick=close; ov.querySelector('#sf_cancel').onclick=close; ov.onclick=e=>{if(e.target===ov)close();};
+  ov.querySelector('#sf_save').onclick=()=>{
+    const courseId=document.getElementById('sf_course').value, number=document.getElementById('sf_number').value.trim(), instructorId=document.getElementById('sf_instructor').value;
+    if(!number||!courseId||!instructorId){toast('يرجى تعبئة بيانات الشعبة المطلوبة','error');return;}
+    const duplicate=DB.data.sections.some(x=>x.id!==id && x.courseId===courseId && String(x.number).trim()===number);
+    if(duplicate){toast('رقم الشعبة موجود مسبقًا لهذا المقرر','error');return;}
+    if(editing){sec.courseId=courseId;sec.number=number;sec.instructorId=instructorId;sec.semester=document.getElementById('sf_semester').value.trim();sec.year=document.getElementById('sf_year').value.trim();sec.status=document.getElementById('sf_status').value;}
+    else{DB.data.sections.push({id:uid('sec'),courseId,number,instructorId,semester:document.getElementById('sf_semester').value.trim(),year:document.getElementById('sf_year').value.trim(),status:document.getElementById('sf_status').value});}
+    const inst=DB.data.instructors.find(x=>x.id===instructorId); if(inst){inst.courseId=courseId;inst.sectionId=sec.id||inst.sectionId;}
+    DB.save();close();renderRoute();toast(editing?'تم تحديث بيانات الشعبة':'تمت إضافة الشعبة بنجاح');
+  };
+}
+
+function openUserForm(id){
+  const editing=!!id;
+  const u=editing ? DB.data.users.find(x=>x.id===id) : {id:null,name:'',username:'',password:'',email:'',role:'instructor',status:'active',courseId:DB.data.courses[0]?.id||'',sectionId:DB.data.sections[0]?.id||''};
+  if(!u){toast('تعذر العثور على المستخدم','error');return;}
+  const ov=document.createElement('div'); ov.className='overlay';
+  ov.innerHTML=`<div class="modal">
+    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:15px;">${editing?'تعديل المستخدم':'إضافة مستخدم جديد'}</h3><button type="button" class="icon-btn" id="uf_close">${ICON.x}</button></div>
+    <div class="modal-body"><div class="grid g-2">
+      <div class="field"><label>الاسم</label><input id="uf_name" value="${u.name||''}"></div>
+      <div class="field"><label>اسم المستخدم</label><input id="uf_username" value="${u.username||''}"></div>
+      <div class="field"><label>كلمة المرور</label><input id="uf_password" type="password" value="${u.password||''}"></div>
+      <div class="field"><label>البريد الإلكتروني</label><input id="uf_email" type="email" value="${u.email||''}"></div>
+      <div class="field"><label>الدور</label><select id="uf_role"><option value="instructor" ${u.role==='instructor'?'selected':''}>عضو هيئة تدريس</option><option value="admin" ${u.role==='admin'?'selected':''}>مدير النظام</option></select></div>
+      <div class="field"><label>الحالة</label><select id="uf_status"><option value="active" ${u.status==='active'?'selected':''}>مفعّل</option><option value="suspended" ${u.status==='suspended'?'selected':''}>موقوف</option></select></div>
+      <div class="field"><label>المقرر</label><select id="uf_course">${DB.data.courses.map(c=>`<option value="${c.id}" ${u.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="uf_section">${DB.data.sections.map(s=>`<option value="${s.id}" ${u.sectionId===s.id?'selected':''}>${courseOf(s.courseId).name} — ${s.number}</option>`).join('')}</select></div>
+    </div></div>
+    <div class="modal-foot"><button type="button" class="btn btn-outline" id="uf_cancel">إلغاء</button><button type="button" class="btn btn-primary" id="uf_save">${ICON.check} حفظ</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove(); ov.querySelector('#uf_close').onclick=close;ov.querySelector('#uf_cancel').onclick=close;ov.onclick=e=>{if(e.target===ov)close();};
+  ov.querySelector('#uf_role').onchange=()=>{const admin=document.getElementById('uf_role').value==='admin';['uf_course','uf_section'].forEach(x=>document.getElementById(x).disabled=admin);};
+  ov.querySelector('#uf_role').dispatchEvent(new Event('change'));
+  ov.querySelector('#uf_save').onclick=()=>{
+    const name=document.getElementById('uf_name').value.trim(),username=document.getElementById('uf_username').value.trim(),password=document.getElementById('uf_password').value;
+    if(!name||!username||!password){toast('يرجى تعبئة الاسم واسم المستخدم وكلمة المرور','error');return;}
+    if(DB.data.users.some(x=>x.id!==id && x.username===username)){toast('اسم المستخدم مستخدم مسبقًا','error');return;}
+    const role=document.getElementById('uf_role').value, courseId=document.getElementById('uf_course').value, sectionId=document.getElementById('uf_section').value;
+    const payload={name,username,password,email:document.getElementById('uf_email').value.trim(),role,status:document.getElementById('uf_status').value,courseId:role==='admin'?'':courseId,sectionId:role==='admin'?'':sectionId,lastLogin:u.lastLogin||'لم يسجل دخول'};
+    if(editing) Object.assign(u,payload); else DB.data.users.push({id:uid('user'),...payload});
+    DB.save();close();renderRoute();toast(editing?'تم تحديث بيانات المستخدم':'تمت إضافة المستخدم بنجاح');
+  };
 }
 
 /* ================================ Page-level event wiring ================================ */
@@ -1556,7 +1649,7 @@ function wirePageEvents(){
   const qaEval = document.getElementById('qaEval'); if(qaEval) qaEval.onclick=()=>{ go('students'); };
   
   // Export and Import Excel / CSV wiring (Robust Fix)
-  const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=()=> exportCSV(scopedStudents());
+  const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=(e)=>{ e.preventDefault(); exportStudentsExcel(scopedStudents()); };
   const deleteAllBtn = document.getElementById('deleteAllStudentsBtn');
   if(deleteAllBtn) deleteAllBtn.onclick=()=>{
     confirmDialog({
@@ -1578,7 +1671,13 @@ function wirePageEvents(){
   if(importBtn && fileInput){
     importBtn.onclick = (e)=>{
       e.preventDefault();
-      fileInput.click();
+      confirmDialog({
+        title:'استيراد وإعادة تهيئة شاملة',
+        message:'سيؤدي استيراد ملف جديد إلى إعادة تهيئة بيانات النظام بالكامل (الطلبة، المقررات، الشعب، وأسماء المدرسين) بناءً على الملف المُستورد. هل تريد المتابعة؟',
+        confirmText:'تأكيد وإعادة التهيئة',
+        danger:true,
+        onConfirm:()=> fileInput.click()
+      });
     };
     fileInput.onchange = (e)=>{
       const file = e.target.files[0];
@@ -1611,17 +1710,17 @@ function wirePageEvents(){
   document.querySelectorAll('[data-nav-course-report]').forEach(el=> el.onclick=()=>{ go('reports'); });
 
   // sections
-  const addSectionBtn=document.getElementById('addSectionBtn'); if(addSectionBtn) addSectionBtn.onclick=()=>toast('نموذج إضافة الشعبة — أدخل رقم الشعبة والمدرس ثم احفظ.','info');
+  const addSectionBtn=document.getElementById('addSectionBtn'); if(addSectionBtn) addSectionBtn.onclick=()=>openSectionForm(null);
   document.querySelectorAll('[data-view-section]').forEach(el=> el.onclick=()=>{ S.studentFilters.sectionId = el.getAttribute('data-view-section'); go('students'); });
-  document.querySelectorAll('[data-edit-section]').forEach(el=> el.onclick=()=> toast('تعديل بيانات الشعبة','info'));
+  document.querySelectorAll('[data-edit-section]').forEach(el=> el.onclick=()=>openSectionForm(el.getAttribute('data-edit-section')));
 
   // users
-  const addUserBtn=document.getElementById('addUserBtn'); if(addUserBtn) addUserBtn.onclick=()=> toast('نموذج إضافة مستخدم جديد (مدير/مدرس)','info');
+  const addUserBtn=document.getElementById('addUserBtn'); if(addUserBtn) addUserBtn.onclick=()=>openUserForm(null);
   document.querySelectorAll('[data-toggle-user]').forEach(el=> el.onclick=()=>{
     const u = DB.data.users.find(x=>x.id===el.getAttribute('data-toggle-user'));
     u.status = u.status==='active'?'suspended':'active'; DB.save(); renderRoute(); toast(u.status==='active'?'تم تفعيل الحساب':'تم إيقاف الحساب','warn');
   });
-  document.querySelectorAll('[data-edit-user]').forEach(el=> el.onclick=()=> toast('تعديل بيانات المستخدم','info'));
+  document.querySelectorAll('[data-edit-user]').forEach(el=> el.onclick=()=>openUserForm(el.getAttribute('data-edit-user')));
 
   // reports
   const genBtn=document.getElementById('genReportBtn'); if(genBtn) genBtn.onclick=()=>{
@@ -1685,75 +1784,222 @@ function openCourseForm(id){
   };
 }
 
-/* ---------------- CSV / Excel Import and Export Handlers ---------------- */
-function exportCSV(students){
-  const header=['الرقم الجامعي','الاسم','المقرر','الشعبة','نسبة الحضور','الأنشطة','التمارين','المنتصف','تقييم المدرس','الحالة'];
-  const lines=[header.join(',')];
-  students.forEach(s=>{
-    const r=classify(s); const actAvg=Math.round((s.activities.activity+s.activities.assignment+s.activities.participation)/3);
-    const evalAvg=Math.round((s.evaluation.score+s.evaluation.participation+s.evaluation.engagement)/3);
-    lines.push([s.studentId, s.name, courseOf(s.courseId).name, sectionOf(s.sectionId).number, r.attRate+'%', actAvg+'%', s.exercises.pct+'%', s.midterm.score+'/'+s.midterm.max, evalAvg+'%', STATUS_LABEL[r.status]].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
-  });
-  const csv='\uFEFF'+lines.join('\n');
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='تقرير_الطلبة.csv'; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url), 1500);
-  toast('تم تصدير الملف بنجاح');
+/* ---------------- CSV / Excel Import and Export Handlers (Full Reset) ---------------- */
+function normalizeExcelHeader(value){
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآ]/g,'ا')
+    .replace(/ة/g,'ه')
+    .replace(/[ًٌٍَُِّْـ]/g,'')
+    .replace(/\s+/g,' ');
 }
 
-function handleExcelImport(file){
-  const reader = new FileReader();
-  reader.onload = function(e){
-    const text = e.target.result;
-    const lines = text.split(/\r\n|\n/);
-    let count = 0;
-    const defaultSec = DB.data.sections[0];
+function excelValue(row, aliases){
+  const keys = Object.keys(row);
+  for(const alias of aliases){
+    const a = normalizeExcelHeader(alias);
+    const key = keys.find(k=>normalizeExcelHeader(k)===a);
+    if(key !== undefined && row[key] !== undefined && row[key] !== null && String(row[key]).trim()!=='') return row[key];
+  }
+  return '';
+}
 
-    lines.forEach((line, index)=>{
-      if(index === 0 || !line.trim()) return; // skip header or empty lines
-      const cols = line.split(/,|\t/).map(val => val.replace(/^["']|["']$/g, '').trim());
-      if(cols.length >= 2 && cols[0] && cols[1]){
-        const studentId = cols[0];
-        const name = cols[1];
-        
-        // Check if student already exists
-        const exists = DB.data.students.some(st => st.studentId === studentId);
-        if(!exists){
-          DB.data.students.push({
-            id: uid('stu'),
-            studentId,
-            name,
-            courseId: defaultSec.courseId,
-            sectionId: defaultSec.id,
-            level: 'السنة الأولى المشتركة',
-            attendance: { total: 28, attended: ri(20, 28), absent: 0 },
-            activities: { activity: ri(60, 95), assignment: ri(60, 95), participation: ri(60, 95) },
-            exercises: { avg: ri(60, 95), weak: 0, pct: ri(65, 95) },
-            midterm: { score: ri(20, 38), max: 40 },
-            evaluation: { score: ri(70, 95), participation: ri(70, 95), engagement: ri(70, 95), comment: 'تمت الإضافة عبر الاستيراد الجماعي' },
-            notes: 'مستورد من ملف خارجي',
-            interventions: [],
-            history: buildFlatHistory(),
-            createdAt: daysAgoISO(0)
-          });
-          count++;
-        }
+function parsePercentValue(v, fallback=0){
+  const n = parseFloat(String(v ?? '').replace('%','').trim());
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function parseScoreValue(v, fallback=0){
+  const m = String(v ?? '').trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*(?:\/\s*(\d+(?:\.\d+)?))?\s*$/);
+  if(!m) return fallback;
+  return parseFloat(m[1]);
+}
+
+function exportStudentsExcel(students){
+  if(typeof XLSX === 'undefined'){
+    exportStudentsCSVFallback(students);
+    toast('تم تصدير البيانات بصيغة CSV لأن مكتبة Excel غير متاحة.', 'warn');
+    return;
+  }
+  if(!students || !students.length){
+    toast('لا توجد بيانات طلاب لتصديرها.', 'warn');
+    return;
+  }
+  const rows = students.map(s=>{
+    const r=classify(s);
+    const c=courseOf(s.courseId);
+    const sec=sectionOf(s.sectionId);
+    const actAvg=Math.round((Number(s.activities?.activity||0)+Number(s.activities?.assignment||0)+Number(s.activities?.participation||0))/3);
+    const evalAvg=Math.round((Number(s.evaluation?.score||0)+Number(s.evaluation?.participation||0)+Number(s.evaluation?.engagement||0))/3);
+    return {
+      'الرقم الجامعي': s.studentId ?? '',
+      'الاسم': s.name ?? '',
+      'المقرر': c?.name ?? '',
+      'الشعبة': sec?.number ?? '',
+      'المدرس': instructorOf(sec?.instructorId)?.name ?? '',
+      'نسبة الحضور': `${r.attRate}%`,
+      'الأنشطة': `${actAvg}%`,
+      'التمارين': `${s.exercises?.pct ?? 0}%`,
+      'المنتصف': `${s.midterm?.score ?? 0}/${s.midterm?.max ?? 40}`,
+      'تقييم المدرس': `${evalAvg}%`,
+      'الحالة': STATUS_LABEL[r.status] ?? r.status ?? ''
+    };
+  });
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[{wch:18},{wch:30},{wch:32},{wch:12},{wch:22},{wch:16},{wch:14},{wch:14},{wch:14},{wch:18},{wch:20}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'الطلبة');
+  XLSX.writeFile(wb,`تقرير_الطلبة_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast(`تم تصدير ${rows.length} طالبًا إلى ملف Excel بنجاح`);
+}
+
+function exportStudentsCSVFallback(students){
+  if(!students || !students.length){ toast('لا توجد بيانات طلاب لتصديرها.', 'warn'); return; }
+  const esc=v=>`"${String(v ?? '').replace(/"/g,'""')}"`;
+  const lines=[];
+  lines.push(['الرقم الجامعي','الاسم','المقرر','الشعبة','المدرس','نسبة الحضور','الأنشطة','التمارين','المنتصف','تقييم المدرس','الحالة'].map(esc).join(','));
+  students.forEach(s=>{
+    const r=classify(s), c=courseOf(s.courseId), sec=sectionOf(s.sectionId), inst=instructorOf(sec?.instructorId);
+    const actAvg=Math.round((Number(s.activities?.activity||0)+Number(s.activities?.assignment||0)+Number(s.activities?.participation||0))/3);
+    const evalAvg=Math.round((Number(s.evaluation?.score||0)+Number(s.evaluation?.participation||0)+Number(s.evaluation?.engagement||0))/3);
+    lines.push([s.studentId,s.name,c?.name||'',sec?.number||'',inst?.name||'',`${r.attRate}%`,`${actAvg}%`,`${s.exercises?.pct||0}%`,`${s.midterm?.score||0}/${s.midterm?.max||40}`,`${evalAvg}%`,STATUS_LABEL[r.status]||r.status].map(esc).join(','));
+  });
+  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=`تقرير_الطلبة_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+function exportCSV(students){
+  exportStudentsExcel(students);
+}
+
+async function handleExcelImport(file){
+  if(typeof XLSX === 'undefined'){
+    toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت ثم أعد فتح الصفحة.', 'error');
+    return;
+  }
+  try{
+    const isCSV = /\.(csv|txt)$/i.test(file.name);
+    let rows=[];
+    if(isCSV){
+      const text=await file.text();
+      const wb=XLSX.read(text,{type:'string',raw:false});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+    }else{
+      const data=await file.arrayBuffer();
+      const wb=XLSX.read(data,{type:'array',cellDates:true});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+    }
+
+    if(!rows.length){ toast('الملف فارغ أو لا يحتوي على صفوف بيانات.', 'warn'); return; }
+
+    // --- إعادة تهيئة كاملة (Reset Database Structures) ---
+    const newCoursesMap = new Map();
+    const newSectionsMap = new Map();
+    const newInstructorsMap = new Map();
+    const newStudents = [];
+    let addedCount = 0;
+
+    rows.forEach((row, idx)=>{
+      const studentId = String(excelValue(row,['الرقم الجامعي','الرقم','رقم الطالب','student id','studentid','id'])||'').trim();
+      const name = String(excelValue(row,['الاسم','اسم الطالب','اسم','student name','studentname','name'])||'').trim();
+      if(!studentId || !name) return;
+
+      // قراءة اسم المقرر ورقم الشعبة والمدرس من المدخلات الجديدة
+      let courseName = String(excelValue(row,['المقرر','اسم المقرر','course','course name'])||'مقرر عام').trim();
+      let courseCode = String(excelValue(row,['رمز المقرر','course code','code'])||('10'+(newCoursesMap.size+1))).trim();
+      let secNumber = String(excelValue(row,['الشعبة','رقم الشعبة','section','section number'])||'101').trim();
+      let instrName = String(excelValue(row,['المدرس','عضو هيئة التدريس','المعلم','instructor','teacher'])||'د. مدرس مقرر').trim();
+
+      // إنشاء أو استرجاع المقرر
+      let courseKey = normalizeExcelHeader(courseName);
+      let courseObj = newCoursesMap.get(courseKey);
+      if(!courseObj){
+        courseObj = { id: uid('c'), code: courseCode, name: courseName, desc: 'مقرر مستورد من ملف Excel', active: true };
+        newCoursesMap.set(courseKey, courseObj);
       }
+
+      // إنشاء أو استرجاع المدرس
+      let instrKey = normalizeExcelHeader(instrName);
+      let instrObj = newInstructorsMap.get(instrKey);
+      if(!instrObj){
+        let instId = uid('inst');
+        instrObj = {
+          id: instId, name: instrName, username: 'inst_'+(newInstructorsMap.size+1), password:'1234',
+          email:'inst_'+(newInstructorsMap.size+1)+'@ksu.edu.sa', courseId: courseObj.id, sectionId: '',
+          role:'instructor', status:'active', lastLogin: daysAgoISO(0),
+          kpis:{ lectures: 92, plan: 90, officeHours: 88, grading: 90, submission: 95 }
+        };
+        newInstructorsMap.set(instrKey, instrObj);
+      }
+
+      // إنشاء أو استرجاع الشعبة
+      let secKey = courseObj.id+'_'+secNumber;
+      let secObj = newSectionsMap.get(secKey);
+      if(!secObj){
+        secObj = { id: uid('sec'), courseId: courseObj.id, number: secNumber, instructorId: instrObj.id, semester: 'الأول', year: '1447هـ', status: 'active' };
+        newSectionsMap.set(secKey, secObj);
+        if(!instrObj.sectionId) instrObj.sectionId = secObj.id;
+      }
+
+      // قراءة الدرجات والمؤشرات
+      const attendance = parsePercentValue(excelValue(row,['نسبة الحضور','الحضور','attendance']),85);
+      const activities = parsePercentValue(excelValue(row,['الأنشطة','activities','activity']),75);
+      const exercises = parsePercentValue(excelValue(row,['التمارين','exercises','exercise']),75);
+      const midtermRaw = String(excelValue(row,['المنتصف','الاختبار النصفي','midterm'])||'');
+      const midtermScore = parseScoreValue(midtermRaw, 25);
+      const midtermMax = parseScoreValue(midtermRaw.match(/\/\s*(\d+(?:\.\d+)?)/)?.[1] || '40', 40);
+      const evaluation = parsePercentValue(excelValue(row,['تقييم المدرس','التقييم','evaluation','instructor evaluation']),80);
+
+      const total = 28;
+      const attended = Math.round((attendance/100)*total);
+
+      newStudents.push({
+        id: uid('stu'),
+        studentId,
+        name,
+        courseId: courseObj.id,
+        sectionId: secObj.id,
+        level: 'السنة الأولى المشتركة',
+        attendance:{ total, attended, absent: Math.max(0, total-attended) },
+        activities:{ activity: activities, assignment: activities, participation: activities },
+        exercises:{ avg: exercises, weak: 0, pct: exercises },
+        midterm:{ score: midtermScore, max: midtermMax },
+        evaluation:{ score: evaluation, participation: evaluation, engagement: evaluation, comment: 'تمت إعادة التهيئة والاستيراد من ملف Excel' },
+        notes: 'مستورد وفق المدخلات الجديدة',
+        interventions: [],
+        history: buildFlatHistory(),
+        createdAt: daysAgoISO(0)
+      });
+      addedCount++;
     });
 
-    if(count > 0){
+    if(newStudents.length > 0){
+      DB.data.courses = Array.from(newCoursesMap.values());
+      DB.data.sections = Array.from(newSectionsMap.values());
+      DB.data.instructors = Array.from(newInstructorsMap.values());
+      DB.data.students = newStudents;
+      
+      // تحديث حسابات المستخدمين لتتطابق مع المدرسين الجدد
+      DB.data.users = [
+        DB.data.users.find(u=>u.role==='admin') || {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin:daysAgoISO(0)},
+        ...DB.data.instructors.map(i=>({id:i.id, name:i.name, username:i.username, password:i.password, role:'instructor', email:i.email, status:i.status, lastLogin:i.lastLogin, courseId:i.courseId, sectionId:i.sectionId}))
+      ];
+
       DB.save();
       renderRoute();
-      toast(`تم استيراد وإضافة ${count} طالبًا بنجاح`);
+      toast(`تمت إعادة التهيئة بنجاح واستيراد ${addedCount} طالبًا مع المقررات والشعب والمدرسين الجدد!`);
     } else {
-      toast('لم يتم العثور على بيانات صالحة. تأكد أن الملف بصيغة CSV أو النص وتتضمن أعمدة الرقم الجامعي والاسم.', 'warn');
+      toast('لم يتم العثور على بيانات صالحة في الملف. تأكد من وجود أعمدة الرقم الجامعي والاسم.', 'warn');
     }
-  };
-  reader.onerror = function(){
-    toast('حدث خطأ أثناء قراءة الملف', 'error');
-  };
-  reader.readAsText(file, 'UTF-8');
+  }catch(err){
+    console.error('Excel import error:', err);
+    toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`,'error');
+  }
 }
 
 /* ================================ Boot ================================ */
