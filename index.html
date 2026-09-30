@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title> Miyar ا</title>
+<title>نظام معيار (Miyar) — تقييم ومتابعة الأداء الأكاديمي</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
@@ -71,7 +71,7 @@ button{font-family:inherit;}
 .sidebar-brand{display:flex; align-items:center; gap:12px; padding:8px 8px 18px; border-bottom:1px solid rgba(255,255,255,.12); margin-bottom:10px;}
 .sidebar-brand .mark{width:42px;height:42px;border-radius:11px;background:linear-gradient(135deg,var(--gold-500),#3399FF);display:flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 auto;box-shadow:0 4px 14px rgba(0,85,165,.35); color:#fff;}
 .sidebar-brand .txt{line-height:1.25;}
-.sidebar-brand .txt b{font-family:'Cairo';font-weight:800;font-size:14.5px;display:block;}
+.sidebar-brand .txt b{font-family:'Cairo';font-weight:800;font-size:15px;display:block;}
 .sidebar-brand .txt span{font-size:11.5px;color:#B0C4DE;}
 .nav-item{
   display:flex; align-items:center; gap:11px; padding:10px 12px; border-radius:10px; cursor:pointer;
@@ -241,8 +241,8 @@ textarea{resize:vertical;min-height:76px;}
 
 <script>
 /* =======================================================================
-    Miyar
-    السنة الأولى المشتركة — قسم العلوم الأساسية
+    نظام معيار (Miyar) — تقييم ومتابعة الأداء الأكاديمي
+    جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية
     ======================================================================= */
 
 const ICON = {
@@ -293,7 +293,7 @@ function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
 
 /* ================================ DB (local) ================================ */
 const DB = {
-  KEY:'ksu_academic_perf_v5',
+  KEY:'miyar_academic_perf_v6',
   data:null,
   load(){
     try{
@@ -416,7 +416,7 @@ function seedData(){
   return {
     courses, sections, instructors, students, users, auditLogs,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-    meta:{ version:'2.3.0', seededAt: new Date().toISOString() }
+    meta:{ version:'3.0.0', seededAt: new Date().toISOString() }
   };
 }
 function weightedPick(pairs){ const r=rnd(); let acc=0; for(const [k,w] of pairs){acc+=w; if(r<=acc) return k;} return pairs[pairs.length-1][0]; }
@@ -543,7 +543,7 @@ function doLogin(username,password,btn){
     DB.save();
     S.route = 'dashboard';
     render();
-    toast('مرحبًا بك، '+u.name);
+    toast('مرحبًا بك في نظام معيار، '+u.name);
   }, 650);
 }
 function doLogout(){
@@ -583,12 +583,12 @@ function navItems(){
   ];
 }
 const ROUTE_META = {
-  dashboard:{title:'لوحة التحكم', desc:'نظرة عامة سريعة على المؤشرات الأكاديمية.'},
+  dashboard:{title:'لوحة التحكم', desc:'نظرة عامة سريعة على المؤشرات الأكاديمية لنظام معيار.'},
   alerts:{title:'التنبيهات الأكاديمية', desc:'الطلبة الذين يحتاجون متابعة أو تدخلًا عاجلًا.'},
   courses:{title:'إدارة المقررات', desc:'إضافة المقررات وتعديلها وإدارة حالتها.'},
   sections:{title:'إدارة الشعب', desc:'شعب المقررات والمدرسين المسؤولين عنها.'},
   students:{title:'بيانات الطلبة', desc:'متابعة الأداء الأكاديمي وتصنيف الطلبة وإدارة ملفاتهم.'},
-  comparison:{title:'مقارنة المقررات الثلاثة', desc:'عرض مقارن لمؤشرات الأداء بين المقررات دون ترتيب تقييمي.'},
+  comparison:{title:'مقارنة المقررات', desc:'عرض مقارن لمؤشرات الأداء بين المقررات دون ترتيب تقييمي.'},
   reports:{title:'التقارير', desc:'إنشاء تقارير مفصلة وتصديرها.'},
   users:{title:'إدارة المستخدمين', desc:'حسابات المدراء والمدرسين وصلاحياتهم.'},
   audit:{title:'سجل النشاطات', desc:'آخر العمليات التي تمت داخل النظام.'},
@@ -610,8 +610,8 @@ function shellView(){
     <div class="mobile-scrim ${S.sidebarOpen?'open':''}" id="scrim"></div>
     <aside class="sidebar ${S.sidebarOpen?'open':''}" id="sidebar">
       <div class="sidebar-brand">
-        <div class="mark">🎓</div>
-        <div class="txt"><b>نظام الأداء الأكاديمي</b><span>جامعة الملك سعود</span></div>
+        <div class="mark">📊</div>
+        <div class="txt"><b>نظام معيار (Miyar)</b><span>جامعة الملك سعود</span></div>
       </div>
       ${navItems().map(it=> it.sec? `<div class="nav-sec">${it.sec}</div>` :
         `<div class="nav-item ${S.route===it.id?'active':''}" data-nav="${it.id}">${it.icon}<span>${it.label}</span></div>`).join('')}
@@ -691,7 +691,7 @@ function loginView(){
     <div class="login-hero">
       <div style="position:relative;z-index:1;">
         <div style="display:flex;align-items:center;gap:14px;">
-          <div style="width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#3399FF,#0055A5);display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 8px 20px rgba(0,0,0,.25);color:#fff;">🎓</div>
+          <div style="width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#3399FF,#0055A5);display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 8px 20px rgba(0,0,0,.25);color:#fff;">📊</div>
           <div>
             <div style="font-family:Cairo;font-weight:800;font-size:17px;">جامعة الملك سعود</div>
             <div style="font-size:12.5px;color:#B0C4DE;">السنة الأولى المشتركة — قسم العلوم الأساسية</div>
@@ -699,8 +699,8 @@ function loginView(){
         </div>
       </div>
       <div style="position:relative;z-index:1;">
-        <h1 style="font-family:Cairo;font-weight:800;font-size:clamp(26px,4vw,38px);line-height:1.35;margin:0 0 16px;">نظام تقييم<br>ومتابعة الأداء الأكاديمي</h1>
-        <p style="color:#DDEBFF;font-size:14.5px;max-width:420px;line-height:1.9;">منصة موحّدة لرصد أداء الطلبة والمدرسين، وتصنيف الحالات الأكاديمية آليًا، ودعم القرار عبر تقارير ومقارنات دقيقة بين المقررات.</p>
+        <h1 style="font-family:Cairo;font-weight:800;font-size:clamp(26px,4vw,38px);line-height:1.35;margin:0 0 16px;">نظام معيار (Miyar)<br>لتقييم ومتابعة الأداء الأكاديمي</h1>
+        <p style="color:#DDEBFF;font-size:14.5px;max-width:420px;line-height:1.9;">منصة ذكية موحّدة لرصد أداء الطلبة والمدرسين، وتصنيف الحالات الأكاديمية آليًا عند رفع ملفات النظام.</p>
         <div style="display:flex;gap:22px;margin-top:26px;flex-wrap:wrap;">
           <div><div id="dynamicCoursesCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.courses.length}</div><div style="font-size:11.5px;color:#B0C4DE;">مقررات رئيسية</div></div>
           <div><div id="dynamicSectionsCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.sections.length}</div><div style="font-size:11.5px;color:#B0C4DE;">شعب دراسية</div></div>
@@ -712,7 +712,7 @@ function loginView(){
     <div class="login-form-side">
       <div class="login-card">
         <h2 style="font-family:Cairo;font-weight:800;font-size:21px;margin:0 0 4px;">تسجيل الدخول</h2>
-        <p style="color:var(--text-muted);font-size:13px;margin:0 0 26px;">أدخل بيانات حسابك للوصول إلى لوحة التحكم</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 26px;">أدخل بيانات حسابك للوصول إلى نظام معيار</p>
         <div id="loginError" style="display:none;background:var(--red-bg);color:var(--red);border-radius:10px;padding:10px 12px;font-size:12.5px;font-weight:700;align-items:center;gap:8px;margin-bottom:16px;"></div>
         <div class="field">
           <label>اسم المستخدم</label>
@@ -835,7 +835,7 @@ function adminDashboard(){
       </div>
       <div class="divider"></div>
       <div style="font-size:12px;color:var(--text-muted);line-height:1.9;">
-        هذه بيانات تجريبية تُستخدم لإظهار النظام. جميع الأرقام تُحسب ديناميكيًا من قاعدة البيانات المحلية.
+        نظام معيار (Miyar) — يتم تحديث المقررات والشعب تلقائيًا عند رفع ملفات Excel الخاصة بالنظام.
       </div>
     </div>
   </div>`;
@@ -1372,7 +1372,7 @@ function sectionReportBody(sectionId){
   const stats = computeStats(students);
   return `<div class="card" id="reportPrintArea" style="padding:24px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">تقرير أداء أكاديمي — ${c?c.name:''}</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
+      <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — تقرير أداء أكاديمي (${c?c.name:''})</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
       <div style="text-align:left;font-size:11.5px;color:var(--text-muted);">تاريخ الإصدار<br><b>${daysAgoISO(0)}</b></div>
     </div>
     <div class="grid g-4" style="margin-bottom:16px;">
@@ -1397,7 +1397,7 @@ function fullCoursesReport(){
   const grand = computeStats(DB.data.students);
   return `<div class="card" id="reportPrintArea" style="padding:24px;">
     <div style="border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">التقرير الشامل للمقررات</h2>
+      <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — التقرير الشامل للمقررات</h2>
       <div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية — ${daysAgoISO(0)}</div>
     </div>
     ${rows.map(({c,stats})=>`
@@ -1819,7 +1819,7 @@ function exportStudentsExcel(students){
   ws['!cols']=[{wch:18},{wch:30},{wch:32},{wch:12},{wch:22},{wch:16},{wch:14},{wch:14},{wch:14},{wch:18},{wch:20}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'الطلبة');
-  XLSX.writeFile(wb,`تقرير_الطلبة_${new Date().toISOString().slice(0,10)}.xlsx`);
+  XLSX.writeFile(wb,`تقرير_معيار_${new Date().toISOString().slice(0,10)}.xlsx`);
   toast(`تم تصدير ${rows.length} طالبًا إلى ملف Excel بنجاح`);
 }
 
@@ -1836,7 +1836,7 @@ function exportStudentsCSVFallback(students){
   });
   const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
   const url=URL.createObjectURL(blob); const a=document.createElement('a');
-  a.href=url; a.download=`تقرير_الطلبة_${new Date().toISOString().slice(0,10)}.csv`;
+  a.href=url; a.download=`تقرير_معيار_${new Date().toISOString().slice(0,10)}.csv`;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
