@@ -702,7 +702,9 @@ function loginView(){
         <h1 style="font-family:Cairo;font-weight:800;font-size:clamp(26px,4vw,38px);line-height:1.35;margin:0 0 16px;">نظام تقييم<br>ومتابعة الأداء الأكاديمي</h1>
         <p style="color:#DDEBFF;font-size:14.5px;max-width:420px;line-height:1.9;">منصة موحّدة لرصد أداء الطلبة والمدرسين، وتصنيف الحالات الأكاديمية آليًا، ودعم القرار عبر تقارير ومقارنات دقيقة بين المقررات.</p>
         <div style="display:flex;gap:22px;margin-top:26px;flex-wrap:wrap;">
-          ${[['3','مقررات رئيسية'],['6','شعب دراسية'],['4','مستويات تصنيف']].map(([n,l])=>`<div><div style="font-family:Cairo;font-weight:800;font-size:24px;">${n}</div><div style="font-size:11.5px;color:#B0C4DE;">${l}</div></div>`).join('')}
+          <div><div id="dynamicCoursesCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.courses.length}</div><div style="font-size:11.5px;color:#B0C4DE;">مقررات رئيسية</div></div>
+          <div><div id="dynamicSectionsCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.sections.length}</div><div style="font-size:11.5px;color:#B0C4DE;">شعب دراسية</div></div>
+          <div><div style="font-family:Cairo;font-weight:800;font-size:24px;">4</div><div style="font-size:11.5px;color:#B0C4DE;">مستويات تصنيف</div></div>
         </div>
       </div>
       <div style="position:relative;z-index:1;font-size:11.5px;color:#94A3B8;">© جامعة الملك سعود — جميع الحقوق محفوظة</div>
@@ -802,7 +804,7 @@ function adminDashboard(){
   <div class="grid" style="grid-template-columns:1.4fr 1fr;margin-bottom:16px;">
     <div class="card" style="padding:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 class="font-head" style="margin:0;font-size:15px;">مقارنة أداء المقررات الثلاثة</h3>
+        <h3 class="font-head" style="margin:0;font-size:15px;">مقارنة أداء المقررات</h3>
         <button class="btn btn-outline btn-sm" data-nav="comparison">${ICON.arrowRight} عرض التفاصيل</button>
       </div>
       <div style="height:250px;"><canvas id="chartCompare"></canvas></div>
@@ -852,7 +854,7 @@ function instructorKpiRow(i){
   const tone = overall>=90?'var(--green)':overall>=75?'var(--amber)':'var(--red)';
   return `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-      <div><div style="font-weight:700;font-size:13px;">${i.name}</div><div class="table-sub">${c.name} — شعبة ${sec.number}</div></div>
+      <div><div style="font-weight:700;font-size:13px;">${i.name}</div><div class="table-sub">${c?c.name:'مقرر محذوف'} — شعبة ${sec?sec.number:'--'}</div></div>
       <div style="font-family:Cairo;font-weight:800;color:${tone};">${overall}%</div>
     </div>
     <div class="progress"><div style="width:${overall}%;background:${tone};"></div></div>
@@ -868,7 +870,7 @@ function alertsList(students, limit){
     return `<div class="alert-row" data-student="${s.id}" style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer;">
       <div style="display:flex;align-items:center;gap:10px;min-width:0;">
         <span style="width:8px;height:8px;border-radius:99px;flex:0 0 auto;background:${r.status==='gray'?'var(--gray)':'var(--red)'};"></span>
-        <div style="min-width:0;"><div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.name}</div><div class="table-sub">${c.name} — شعبة ${sec.number}</div></div>
+        <div style="min-width:0;"><div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.name}</div><div class="table-sub">${c?c.name:''} — شعبة ${sec?sec.number:''}</div></div>
       </div>
       ${badgeHTML(r.status)}
     </div>`;
@@ -883,10 +885,10 @@ function instructorDashboard(){
   const stats = computeStats(students);
   return `
   <div class="card" style="padding:16px 18px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:22px;align-items:center;">
-    ${infoBlock('المقرر', c.name+' ('+c.code+')')}
-    ${infoBlock('الشعبة', sec.number)}
+    ${infoBlock('المقرر', (c?c.name:'')+' ('+(c?c.code:'')+')')}
+    ${infoBlock('الشعبة', sec?sec.number:'')}
     ${infoBlock('المدرس', inst.name)}
-    ${infoBlock('الفصل الدراسي', sec.semester+' — '+sec.year)}
+    ${infoBlock('الفصل الدراسي', (sec?sec.semester:'الأول')+' — '+(sec?sec.year:'1447هـ'))}
   </div>
   <div class="grid g-4" style="margin-bottom:16px;">
     ${kpiCard(ICON.grad,'إجمالي الطلبة',stats.total,'primary')}
@@ -950,7 +952,7 @@ function alertsView(){
       ${items.map(({s,r})=>{ const c=courseOf(s.courseId), se=sectionOf(s.sectionId);
         return `<tr data-student="${s.id}">
           <td data-label="الطالب"><div class="table-name">${s.name}</div><div class="table-sub">${s.studentId}</div></td>
-          <td data-label="المقرر">${c.name} — ${se.number}</td>
+          <td data-label="المقرر">${c?c.name:''} — ${se?se.number:''}</td>
           <td data-label="الحضور">${r.attRate}%</td>
           <td data-label="الحالة">${badgeHTML(r.status)}</td>
           <td data-label=""><button class="iconbtn-sm" title="عرض التفاصيل">${ICON.eye}</button></td>
@@ -1009,8 +1011,8 @@ function sectionsView(){
       const c=courseOf(s.courseId), i=instructorOf(s.instructorId), n=studentsFor(s.courseId,s.id).length;
       return `<tr>
         <td data-label="الشعبة"><b>${s.number}</b></td>
-        <td data-label="المقرر">${c.name}</td>
-        <td data-label="المدرس">${i.name}</td>
+        <td data-label="المقرر">${c?c.name:''}</td>
+        <td data-label="المدرس">${i?i.name:''}</td>
         <td data-label="الفصل">${s.semester} — ${s.year}</td>
         <td data-label="الطلبة">${n}</td>
         <td data-label="الحالة"><span class="badge b-green"><span class="dot"></span>نشطة</span></td>
@@ -1040,7 +1042,7 @@ function studentsView(){
   S.studentPage = Math.min(S.studentPage,totalPages);
   const pageList = list.slice((S.studentPage-1)*pageSize, S.studentPage*pageSize);
 
-  const sectionOptions = inst? '' : `<select id="filterSection"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${courseOf(s.courseId).name} — شعبة ${s.number}</option>`).join('')}</select>`;
+  const sectionOptions = inst? '' : `<select id="filterSection"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select>`;
 
   return `
   <div class="card" style="padding:14px 16px;margin-bottom:14px;">
@@ -1070,9 +1072,11 @@ function studentsView(){
         const r = classify(s);
         const actAvg = Math.round((s.activities.activity+s.activities.assignment+s.activities.participation)/3);
         const evalAvg = Math.round((s.evaluation.score+s.evaluation.participation+s.evaluation.engagement)/3);
+        const crs = courseOf(s.courseId);
+        const sec = sectionOf(s.sectionId);
         return `<tr data-student="${s.id}">
           <td data-label="الرقم الجامعي">${s.studentId}</td>
-          <td data-label="الاسم"><div class="table-name">${s.name}</div><div class="table-sub">${courseOf(s.courseId).name} — ${sectionOf(s.sectionId).number}</div></td>
+          <td data-label="الاسم"><div class="table-name">${s.name}</div><div class="table-sub">${crs?crs.name:''} — ${sec?sec.number:''}</div></td>
           <td data-label="الحضور">${r.attRate}%</td>
           <td data-label="الأنشطة">${actAvg}%</td>
           <td data-label="التمارين">${s.exercises.pct}%</td>
@@ -1105,7 +1109,7 @@ function openStudentDetail(id){
     <div class="modal-head">
       <div style="display:flex;align-items:center;gap:12px;">
         <div class="avatar" style="width:44px;height:44px;">${s.name.trim().slice(-2)}</div>
-        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${s.name}</div><div class="table-sub">${s.studentId} — ${c.name} — شعبة ${sec.number} — ${instructorOf(sec.instructorId).name}</div></div>
+        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${s.name}</div><div class="table-sub">${s.studentId} — ${c?c.name:''} — شعبة ${sec?sec.number:''} — ${sec?instructorOf(sec.instructorId)?.name||'':''}</div></div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">${badgeHTML(r.status,true)}<button class="icon-btn" id="closeStudentModal">${ICON.x}</button></div>
     </div>
@@ -1166,7 +1170,7 @@ function openStudentForm(id){
   const editing = !!id;
   const inst = currentInstructor();
   const s = editing? DB.data.students.find(x=>x.id===id) : {
-    id:null, studentId:'', name:'', courseId: inst? inst.courseId: DB.data.courses[0].id, sectionId: inst? inst.sectionId: '',
+    id:null, studentId:'', name:'', courseId: inst? inst.courseId: DB.data.courses[0]?.id||'', sectionId: inst? inst.sectionId: '',
     attendance:{total:28,attended:28,absent:0}, activities:{activity:0,assignment:0,participation:0},
     exercises:{avg:0,weak:0,pct:0}, midterm:{score:0,max:40}, evaluation:{score:0,participation:0,engagement:0,comment:''},
     notes:'', interventions:[], history: buildFlatHistory()
@@ -1208,7 +1212,7 @@ function openStudentForm(id){
         <select id="f_course" ${inst?'disabled':''}>${DB.data.courses.map(c=>`<option value="${c.id}" ${draft.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select>
       </div>
       <div class="field"><label>الشعبة</label>
-        <select id="f_section" ${inst?'disabled':''}>${DB.data.sections.filter(x=>x.courseId===draft.courseId).map(sec=>`<option value="${sec.id}" ${draft.sectionId===sec.id?'selected':''}>شعبة ${sec.number} — ${instructorOf(sec.instructorId).name}</option>`).join('')}</select>
+        <select id="f_section" ${inst?'disabled':''}>${DB.data.sections.filter(x=>x.courseId===draft.courseId).map(sec=>`<option value="${sec.id}" ${draft.sectionId===sec.id?'selected':''}>شعبة ${sec.number} — ${instructorOf(sec.instructorId)?.name||''}</option>`).join('')}</select>
       </div>
     </div>`;
   }
@@ -1353,7 +1357,7 @@ function reportsView(){
     <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">إعداد تقرير مخصص</h3>
     <div class="grid g-4">
       <div class="field"><label>المقرر</label><select id="rf_course"><option value="all">جميع المقررات</option>${DB.data.courses.map(c=>`<option value="${c.id}" ${f.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
-      <div class="field"><label>الشعبة</label><select id="rf_section"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${courseOf(s.courseId).name} —${s.number}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="rf_section"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} —${s.number}</option>`).join('')}</select></div>
       <div class="field"><label>مستوى الطالب</label><select id="rf_level"><option>السنة الأولى المشتركة</option></select></div>
       <div class="field"><label>الفصل الدراسي</label><select id="rf_sem"><option>الأول — 1447هـ</option></select></div>
     </div>
@@ -1363,16 +1367,16 @@ function reportsView(){
   <div id="reportOutput"></div>`;
 }
 function sectionReportBody(sectionId){
-  const sec = sectionOf(sectionId), c = courseOf(sec.courseId), inst = instructorOf(sec.instructorId);
-  const students = studentsFor(c.id, sectionId);
+  const sec = sectionOf(sectionId), c = courseOf(sec?.courseId), inst = instructorOf(sec?.instructorId);
+  const students = studentsFor(c?c.id:'', sectionId);
   const stats = computeStats(students);
   return `<div class="card" id="reportPrintArea" style="padding:24px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">تقرير أداء أكاديمي — ${c.name}</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
+      <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">تقرير أداء أكاديمي — ${c?c.name:''}</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
       <div style="text-align:left;font-size:11.5px;color:var(--text-muted);">تاريخ الإصدار<br><b>${daysAgoISO(0)}</b></div>
     </div>
     <div class="grid g-4" style="margin-bottom:16px;">
-      ${infoBlock('الشعبة', sec.number)} ${infoBlock('المدرس', inst.name)} ${infoBlock('الفصل الدراسي', sec.semester+' — '+sec.year)} ${infoBlock('عدد الطلبة', students.length)}
+      ${infoBlock('الشعبة', sec?sec.number:'')} ${infoBlock('المدرس', inst?inst.name:'')} ${infoBlock('الفصل الدراسي', (sec?sec.semester:'الأول')+' — '+(sec?sec.year:'1447هـ'))} ${infoBlock('عدد الطلبة', students.length)}
     </div>
     <div class="grid g-4" style="margin-bottom:16px;">
       ${miniStat('متوسط الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر', stats.green)} ${miniStat('أصفر', stats.yellow)} ${miniStat('أحمر / رمادي', stats.red+' / '+stats.gray)}
@@ -1393,7 +1397,7 @@ function fullCoursesReport(){
   const grand = computeStats(DB.data.students);
   return `<div class="card" id="reportPrintArea" style="padding:24px;">
     <div style="border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">التقرير الشامل للمقررات الثلاثة</h2>
+      <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">التقرير الشامل للمقررات</h2>
       <div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية — ${daysAgoISO(0)}</div>
     </div>
     ${rows.map(({c,stats})=>`
@@ -1418,7 +1422,8 @@ function usersView(){
   return `<div class="card"><div class="scrollx"><table class="responsive-cards">
     <thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th><th>المقرر/الشعبة</th><th>الحالة</th><th>آخر دخول</th><th></th></tr></thead>
     <tbody>${DB.data.users.map(u=>{
-      const scope = u.role==='instructor'? `${courseOf(u.courseId).name} —${sectionOf(u.sectionId).number}` : 'جميع المقررات';
+      const crs = courseOf(u.courseId), sec = sectionOf(u.sectionId);
+      const scope = u.role==='instructor'? `${crs?crs.name:''} — ${sec?sec.number:''}` : 'جميع المقررات';
       return `<tr>
         <td data-label="الاسم"><div class="table-name">${u.name}</div></td>
         <td data-label="اسم المستخدم">${u.username}</td>
@@ -1524,34 +1529,6 @@ function afterRouteRender(){
       options: baseChartOpts({y:{beginAtZero:true,max:100}, plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10, font:{size:11}}}}})
     });
   }
-  /* Fallback: keep the comparison chart visible even if Chart.js CDN is unavailable. */
-  if(cmpEl && typeof Chart==='undefined'){
-    const ctx=cmpEl.getContext('2d');
-    const rect=cmpEl.getBoundingClientRect();
-    const dpr=window.devicePixelRatio||1;
-    const w=Math.max(300,Math.round(rect.width)), h=Math.max(220,Math.round(rect.height));
-    cmpEl.width=w*dpr; cmpEl.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.clearRect(0,0,w,h);
-    const pad={l:42,r:16,t:16,b:62}, cw=w-pad.l-pad.r, ch=h-pad.t-pad.b;
-    ctx.font='11px Cairo, Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--border').trim()||'#CBD5E1';
-    ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';
-    for(let v=0;v<=100;v+=20){
-      const y=pad.t+ch-(v/100)*ch; ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cw,y); ctx.stroke();
-      ctx.fillText(v+'%',pad.l-18,y);
-    }
-    const colors=[statusColor('green'),statusColor('yellow'),statusColor('red'),statusColor('gray')];
-    const vals=rows.map(r=>[r.greenPct,r.yellowPct,r.redPct,r.grayPct]);
-    const groupW=cw/Math.max(1,labels.length), barW=Math.min(16,groupW/6), gap=3;
-    labels.forEach((label,i)=>{
-      const start=pad.l+i*groupW+(groupW-(4*barW+3*gap))/2;
-      vals[i].forEach((v,j)=>{ const bh=(v/100)*ch, x=start+j*(barW+gap), y=pad.t+ch-bh; ctx.fillStyle=colors[j]; ctx.fillRect(x,y,barW,bh); });
-      ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';
-      ctx.fillText(label,pad.l+i*groupW+groupW/2,pad.t+ch+20);
-    });
-    const legend=[['أخضر',colors[0]],['أصفر',colors[1]],['أحمر',colors[2]],['رمادي',colors[3]]];
-    let lx=pad.l; legend.forEach(([name,color])=>{ctx.fillStyle=color;ctx.fillRect(lx,h-28,10,10);ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text-muted').trim()||'#475569';ctx.fillText(name,lx+25,h-23);lx+=72;});
-  }
   const frEl = document.getElementById('chartFullReport');
   if(frEl){
     const labels = DB.data.courses.map(c=>c.name);
@@ -1614,7 +1591,7 @@ function openUserForm(id){
       <div class="field"><label>الدور</label><select id="uf_role"><option value="instructor" ${u.role==='instructor'?'selected':''}>عضو هيئة تدريس</option><option value="admin" ${u.role==='admin'?'selected':''}>مدير النظام</option></select></div>
       <div class="field"><label>الحالة</label><select id="uf_status"><option value="active" ${u.status==='active'?'selected':''}>مفعّل</option><option value="suspended" ${u.status==='suspended'?'selected':''}>موقوف</option></select></div>
       <div class="field"><label>المقرر</label><select id="uf_course">${DB.data.courses.map(c=>`<option value="${c.id}" ${u.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
-      <div class="field"><label>الشعبة</label><select id="uf_section">${DB.data.sections.map(s=>`<option value="${s.id}" ${u.sectionId===s.id?'selected':''}>${courseOf(s.courseId).name} — ${s.number}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="uf_section">${DB.data.sections.map(s=>`<option value="${s.id}" ${u.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — ${s.number}</option>`).join('')}</select></div>
     </div></div>
     <div class="modal-foot"><button type="button" class="btn btn-outline" id="uf_cancel">إلغاء</button><button type="button" class="btn btn-primary" id="uf_save">${ICON.check} حفظ</button></div>
   </div>`;
@@ -1648,7 +1625,6 @@ function wirePageEvents(){
   const qaAdd = document.getElementById('qaAddStudent'); if(qaAdd) qaAdd.onclick=()=>openStudentForm(null);
   const qaEval = document.getElementById('qaEval'); if(qaEval) qaEval.onclick=()=>{ go('students'); };
   
-  // Export and Import Excel / CSV wiring (Robust Fix)
   const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=(e)=>{ e.preventDefault(); exportStudentsExcel(scopedStudents()); };
   const deleteAllBtn = document.getElementById('deleteAllStudentsBtn');
   if(deleteAllBtn) deleteAllBtn.onclick=()=>{
@@ -1682,21 +1658,18 @@ function wirePageEvents(){
     fileInput.onchange = (e)=>{
       const file = e.target.files[0];
       if(file) handleExcelImport(file);
-      fileInput.value = ''; // reset to allow choosing the same file again
+      fileInput.value = '';
     };
   }
 
-  // students filters
   const stuSearch=document.getElementById('stuSearch'); if(stuSearch) stuSearch.oninput=()=>{ S.studentFilters.q=stuSearch.value; S.studentPage=1; renderRoute(); };
   const fs=document.getElementById('filterStatus'); if(fs) fs.onchange=()=>{ S.studentFilters.status=fs.value; S.studentPage=1; renderRoute(); };
   const fsec=document.getElementById('filterSection'); if(fsec) fsec.onchange=()=>{ S.studentFilters.sectionId=fsec.value; S.studentPage=1; renderRoute(); };
   const fsort=document.getElementById('filterSort'); if(fsort) fsort.onchange=()=>{ S.studentFilters.sort=fsort.value; renderRoute(); };
   document.querySelectorAll('[data-page]').forEach(el=> el.onclick=()=>{ S.studentPage=parseInt(el.getAttribute('data-page')); renderRoute(); });
 
-  // alerts rows
   document.querySelectorAll('.alert-row').forEach(el=> el.onclick=()=> openStudentDetail(el.getAttribute('data-student')));
 
-  // courses
   const addCourseBtn=document.getElementById('addCourseBtn'); if(addCourseBtn) addCourseBtn.onclick=()=>openCourseForm(null);
   document.querySelectorAll('[data-edit-course]').forEach(el=> el.onclick=()=> openCourseForm(el.getAttribute('data-edit-course')));
   document.querySelectorAll('[data-del-course]').forEach(el=> el.onclick=()=>{
@@ -1709,12 +1682,10 @@ function wirePageEvents(){
   document.querySelectorAll('[data-nav-course-sections]').forEach(el=> el.onclick=()=>go('sections'));
   document.querySelectorAll('[data-nav-course-report]').forEach(el=> el.onclick=()=>{ go('reports'); });
 
-  // sections
   const addSectionBtn=document.getElementById('addSectionBtn'); if(addSectionBtn) addSectionBtn.onclick=()=>openSectionForm(null);
   document.querySelectorAll('[data-view-section]').forEach(el=> el.onclick=()=>{ S.studentFilters.sectionId = el.getAttribute('data-view-section'); go('students'); });
   document.querySelectorAll('[data-edit-section]').forEach(el=> el.onclick=()=>openSectionForm(el.getAttribute('data-edit-section')));
 
-  // users
   const addUserBtn=document.getElementById('addUserBtn'); if(addUserBtn) addUserBtn.onclick=()=>openUserForm(null);
   document.querySelectorAll('[data-toggle-user]').forEach(el=> el.onclick=()=>{
     const u = DB.data.users.find(x=>x.id===el.getAttribute('data-toggle-user'));
@@ -1722,12 +1693,11 @@ function wirePageEvents(){
   });
   document.querySelectorAll('[data-edit-user]').forEach(el=> el.onclick=()=>openUserForm(el.getAttribute('data-edit-user')));
 
-  // reports
   const genBtn=document.getElementById('genReportBtn'); if(genBtn) genBtn.onclick=()=>{
     const courseId=document.getElementById('rf_course').value, sectionId=document.getElementById('rf_section').value;
     let target;
     if(sectionId!=='all') target = sectionReportBody(sectionId);
-    else if(courseId!=='all'){ const sec = DB.data.sections.find(s=>s.courseId===courseId); target = sectionReportBody(sec.id); }
+    else if(courseId!=='all'){ const sec = DB.data.sections.find(s=>s.courseId===courseId); target = sectionReportBody(sec?sec.id:''); }
     else target = fullCoursesReport();
     document.getElementById('reportOutput').innerHTML = target;
     afterRouteRender();
@@ -1739,7 +1709,6 @@ function wirePageEvents(){
   };
   const csvBtn0=document.getElementById('csvBtn'); if(csvBtn0) csvBtn0.onclick=()=>exportCSV(scopedStudents());
 
-  // settings
   const saveSettings=document.getElementById('saveSettingsBtn'); if(saveSettings) saveSettings.onclick=()=>{
     const st = DB.data.settings;
     st.greenMin = parseFloat(document.getElementById('st_green').value)||st.greenMin;
@@ -1897,7 +1866,6 @@ async function handleExcelImport(file){
 
     if(!rows.length){ toast('الملف فارغ أو لا يحتوي على صفوف بيانات.', 'warn'); return; }
 
-    // --- إعادة تهيئة كاملة (Reset Database Structures) ---
     const newCoursesMap = new Map();
     const newSectionsMap = new Map();
     const newInstructorsMap = new Map();
@@ -1909,13 +1877,11 @@ async function handleExcelImport(file){
       const name = String(excelValue(row,['الاسم','اسم الطالب','اسم','student name','studentname','name'])||'').trim();
       if(!studentId || !name) return;
 
-      // قراءة اسم المقرر ورقم الشعبة والمدرس من المدخلات الجديدة
       let courseName = String(excelValue(row,['المقرر','اسم المقرر','course','course name'])||'مقرر عام').trim();
       let courseCode = String(excelValue(row,['رمز المقرر','course code','code'])||('10'+(newCoursesMap.size+1))).trim();
       let secNumber = String(excelValue(row,['الشعبة','رقم الشعبة','section','section number'])||'101').trim();
       let instrName = String(excelValue(row,['المدرس','عضو هيئة التدريس','المعلم','instructor','teacher'])||'د. مدرس مقرر').trim();
 
-      // إنشاء أو استرجاع المقرر
       let courseKey = normalizeExcelHeader(courseName);
       let courseObj = newCoursesMap.get(courseKey);
       if(!courseObj){
@@ -1923,7 +1889,6 @@ async function handleExcelImport(file){
         newCoursesMap.set(courseKey, courseObj);
       }
 
-      // إنشاء أو استرجاع المدرس
       let instrKey = normalizeExcelHeader(instrName);
       let instrObj = newInstructorsMap.get(instrKey);
       if(!instrObj){
@@ -1937,7 +1902,6 @@ async function handleExcelImport(file){
         newInstructorsMap.set(instrKey, instrObj);
       }
 
-      // إنشاء أو استرجاع الشعبة
       let secKey = courseObj.id+'_'+secNumber;
       let secObj = newSectionsMap.get(secKey);
       if(!secObj){
@@ -1946,7 +1910,6 @@ async function handleExcelImport(file){
         if(!instrObj.sectionId) instrObj.sectionId = secObj.id;
       }
 
-      // قراءة الدرجات والمؤشرات
       const attendance = parsePercentValue(excelValue(row,['نسبة الحضور','الحضور','attendance']),85);
       const activities = parsePercentValue(excelValue(row,['الأنشطة','activities','activity']),75);
       const exercises = parsePercentValue(excelValue(row,['التمارين','exercises','exercise']),75);
@@ -1984,7 +1947,6 @@ async function handleExcelImport(file){
       DB.data.instructors = Array.from(newInstructorsMap.values());
       DB.data.students = newStudents;
       
-      // تحديث حسابات المستخدمين لتتطابق مع المدرسين الجدد
       DB.data.users = [
         DB.data.users.find(u=>u.role==='admin') || {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin:daysAgoISO(0)},
         ...DB.data.instructors.map(i=>({id:i.id, name:i.name, username:i.username, password:i.password, role:'instructor', email:i.email, status:i.status, lastLogin:i.lastLogin, courseId:i.courseId, sectionId:i.sectionId}))
