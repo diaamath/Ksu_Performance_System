@@ -308,7 +308,6 @@ const DB = {
     catch(e){ }
     if(typeof SYNC!=='undefined') SYNC.schedulePush();
   },
-  },
   reset(){ this.data = seedData(); this.save(); }
 };
 
@@ -780,6 +779,7 @@ function adminDashboard(){
     ${kpiCard(ICON.alert,'نسبة الأصفر',stats.yellowPct+'%','amber')}
     ${kpiCard(ICON.slash,'نسبة الأحمر + الرمادي',(stats.redPct+stats.grayPct)+'%','red')}
   </div>
+
   ${instructorUpdatesCard()}
   <div class="grid" style="grid-template-columns:1.1fr 1fr;margin-bottom:16px;">
     <div class="card" style="padding:18px;">
@@ -1622,7 +1622,8 @@ function wirePageEvents(){
     const id = el.getAttribute('data-del-student'); const stu = DB.data.students.find(x=>x.id===id);
     confirmDialog({title:'حذف الطالب', message:`هل أنت متأكد من حذف الطالب "${stu.name}"؟ لا يمكن التراجع عن هذا الإجراء.`, confirmText:'حذف', onConfirm:()=>{
       trackUpdate('حذف طالب', stu.name);
-      DB.data.students = DB.data.students.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف الطالب بنجاح');    }});
+      DB.data.students = DB.data.students.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف الطالب بنجاح');
+    }});
   });
   const addStudentBtn = document.getElementById('addStudentBtn'); if(addStudentBtn) addStudentBtn.onclick=()=>openStudentForm(null);
   const qaAdd = document.getElementById('qaAddStudent'); if(qaAdd) qaAdd.onclick=()=>openStudentForm(null);
@@ -1966,11 +1967,12 @@ async function handleExcelImport(file){
     toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`,'error');
   }
 }
+
 /* ================================ Cloud Sync + Instructor Update Tracking ================================ */
 const SYNC = {
-  url:'https://mayar-91252-default-rtdb.firebaseio.com/',   // <-- put your Firebase URL here
+  url:'https://YOUR-PROJECT-default-rtdb.firebaseio.com',   // <-- put your Firebase URL here
   ready:false, timer:null, lastHash:'',
-  on(){ return !!this.url && !this.url.includes('YOUR-PROJECT'); },
+  on(){ return !!this.url && !this.url.includes('https://mayar-91252-default-rtdb.firebaseio.com/'); },
   async req(path, method, body){
     const r = await fetch(this.url + path + '.json', {
       method, headers:{'Content-Type':'application/json'},
