@@ -306,6 +306,8 @@ const DB = {
   save(){
     try{ localStorage.setItem(this.KEY, JSON.stringify(this.data)); }
     catch(e){ }
+    if(typeof SYNC!=='undefined') SYNC.schedulePush();
+  },
   },
   reset(){ this.data = seedData(); this.save(); }
 };
@@ -778,7 +780,7 @@ function adminDashboard(){
     ${kpiCard(ICON.alert,'نسبة الأصفر',stats.yellowPct+'%','amber')}
     ${kpiCard(ICON.slash,'نسبة الأحمر + الرمادي',(stats.redPct+stats.grayPct)+'%','red')}
   </div>
-
+  ${instructorUpdatesCard()}
   <div class="grid" style="grid-template-columns:1.1fr 1fr;margin-bottom:16px;">
     <div class="card" style="padding:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -1310,6 +1312,7 @@ function openStudentForm(id){
       }
       DB.save();
       DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:(editing?'تحديث بيانات الطالب ':'إضافة طالب جديد ')+draft.name});
+      trackUpdate(editing?'تحديث بيانات طالب':'إضافة طالب', draft.name);
       ov.remove();
       renderRoute();
       toast(editing? 'تم تحديث بيانات الطالب بنجاح':'تمت إضافة الطالب بنجاح');
@@ -1618,8 +1621,8 @@ function wirePageEvents(){
   document.querySelectorAll('[data-del-student]').forEach(el=> el.onclick=(e)=>{ e.stopPropagation();
     const id = el.getAttribute('data-del-student'); const stu = DB.data.students.find(x=>x.id===id);
     confirmDialog({title:'حذف الطالب', message:`هل أنت متأكد من حذف الطالب "${stu.name}"؟ لا يمكن التراجع عن هذا الإجراء.`, confirmText:'حذف', onConfirm:()=>{
-      DB.data.students = DB.data.students.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف الطالب بنجاح');
-    }});
+      trackUpdate('حذف طالب', stu.name);
+      DB.data.students = DB.data.students.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف الطالب بنجاح');    }});
   });
   const addStudentBtn = document.getElementById('addStudentBtn'); if(addStudentBtn) addStudentBtn.onclick=()=>openStudentForm(null);
   const qaAdd = document.getElementById('qaAddStudent'); if(qaAdd) qaAdd.onclick=()=>openStudentForm(null);
@@ -1963,10 +1966,121 @@ async function handleExcelImport(file){
     toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`,'error');
   }
 }
+/* ================================ Cloud Sync + Instructor Update Tracking ================================ */
+const SYNC = {
+  url:'https://mayar-91252-default-rtdb.firebaseio.com/',   // <-- put your Firebase URL here
+  ready:false, timer:null, lastHash:'',
+  on(){ return !!this.url && !this.url.includes('YOUR-PROJECT'); },
+  async req(path, method, body){
+    const r = await fetch(this.url + path + '.json', {
+      method, headers:{'Content-Type':'application/json'},
+      body: body===undefined ? undefined : JSON.stringify(body)
+    });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  },
+  schedulePush(){
+    if(!this.on() || !S.user) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(()=> this.push().catch(e=>console.error('sync push',e)), 600);
+  },
+  async push(){
+    const d = DB.data;
+    if(S.user.role==='admin'){
+      const bySec = {};
+      d.students.forEach(s=>{ (bySec[s.sectionId] = bySec[s.sectionId] || []).push(s); });
+      await this.req('/base','PUT',{
+        courses:d.courses, sections:d.sections, instructors:d.instructors,
+        users:d.users, settings:d.settings, auditLogs:d.auditLogs.slice(0,100)
+      });
+      await this.req('/students','PUT',bySec);
+      this.ready = true;
+    } else if(this.ready){
+      const inst = currentInstructor(); if(!inst) return;
+      await this.req('/students/'+inst.sectionId,'PUT', d.students.filter(s=>s.sectionId===inst.sectionId));
+    }
+  },
+  async pull(){
+    if(!this.on()) return false;
+    const all = await this.req('','GET');
+    if(!all || !all.base){ this.ready = false; return false; }
+    const h = JSON.stringify(all);
+    this.ready = true;
+    if(h === this.lastHash) return false;
+    this.lastHash = h;
+    const b = all.base, d = DB.data;
+    ['courses','sections','instructors','users'].forEach(k=> d[k] = Object.values(b[k]||{}));
+    d.settings = b.settings || d.settings;
+    d.auditLogs = Object.values(b.auditLogs||{});
+    d.students = Object.values(all.students||{}).flatMap(a=> Object.values(a||{})).map(s=>{
+      s.interventions = Object.values(s.interventions||{});
+      s.history = Object.values(s.history||{});
+      return s;
+    });
+    d.updates = Object.values(all.updates||{}).sort((a,b)=> b.time.localeCompare(a.time)).slice(0,300);
+    try{ localStorage.setItem(DB.KEY, JSON.stringify(d)); }catch(e){}
+    if(S.user){ S.user = d.users.find(u=>u.id===S.user.id) || S.user; }
+    return true;
+  }
+};
+
+function trackUpdate(action, target){
+  const inst = currentInstructor(); if(!inst) return;
+  const e = { id:uid('upd'), time:new Date().toISOString(), instructorId:inst.id, instructorName:inst.name,
+              courseId:inst.courseId, sectionId:inst.sectionId, action, target:target||'' };
+  DB.data.updates = DB.data.updates || [];
+  DB.data.updates.unshift(e);
+  if(SYNC.on()) SYNC.req('/updates','POST',e).catch(err=>console.error('track',err));
+}
+
+function fmtDateTime(iso){
+  try{ return new Date(iso).toLocaleString('ar-SA',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ return iso; }
+}
+
+function instructorUpdatesCard(){
+  const ups = DB.data.updates || [];
+  const rows = DB.data.instructors.map(i=>{
+    const mine = ups.filter(u=>u.instructorId===i.id);
+    return { i, c:courseOf(i.courseId), sec:sectionOf(i.sectionId), last:mine[0], n:mine.length,
+             stu:DB.data.students.filter(s=>s.sectionId===i.sectionId).length };
+  });
+  return `<div class="card" style="padding:18px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+      <h3 class="font-head" style="margin:0;font-size:15px;">آخر تحديثات بيانات المدرسين (inst)</h3>
+      <span class="badge ${SYNC.on()?'b-green':'b-amber'}"><span class="dot"></span>${SYNC.on()?'مزامنة سحابية مفعّلة':'المزامنة غير مفعّلة'}</span>
+    </div>
+    <div class="scrollx"><table class="responsive-cards">
+      <thead><tr><th>المدرس</th><th>المقرر / الشعبة</th><th>عدد الطلبة</th><th>آخر تحديث</th><th>آخر عملية</th><th>عدد التحديثات</th></tr></thead>
+      <tbody>${rows.map(({i,c,sec,last,n,stu})=>`<tr style="cursor:default;">
+        <td data-label="المدرس"><div class="table-name">${i.name}</div><div class="table-sub">${i.username}</div></td>
+        <td data-label="المقرر">${c?c.name:''} — ${sec?sec.number:''}</td>
+        <td data-label="الطلبة">${stu}</td>
+        <td data-label="آخر تحديث">${last?fmtDateTime(last.time):'<span class="table-sub">لا يوجد</span>'}</td>
+        <td data-label="آخر عملية">${last?(last.action+(last.target?' — '+last.target:'')):'—'}</td>
+        <td data-label="التحديثات">${n}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    ${ups.length?`<div class="divider"></div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px;">أحدث العمليات</div>
+    ${ups.slice(0,8).map(u=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+      <span><b>${u.instructorName}</b> — ${u.action}${u.target?': '+u.target:''}</span>
+      <span class="table-sub">${fmtDateTime(u.time)}</span></div>`).join('')}`:''}
+  </div>`;
+}
+
+/* auto-refresh every 20s (skips if a form/modal is open or the user is typing) */
+setInterval(async ()=>{
+  if(!S.user || !SYNC.on()) return;
+  if(document.querySelector('.overlay')) return;
+  const a = document.activeElement;
+  if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+  try{ if(await SYNC.pull()) renderRoute(); }catch(e){ console.error('sync pull',e); }
+}, 20000);
 
 /* ================================ Boot ================================ */
 DB.load();
 render();
+SYNC.pull().then(changed=>{ if(changed) render(); }).catch(e=>console.error('sync pull',e));
 </script>
 </body>
 </html>
