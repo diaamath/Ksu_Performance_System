@@ -233,6 +233,30 @@ textarea{resize:vertical;min-height:76px;}
 }
 .hide-mobile{display:inline-flex;}
 @media(max-width:640px){.hide-mobile{display:none;}}
+
+/* ---------- scheme editor / reports (معايير التقييم) ---------- */
+.crit-card{padding:18px;}
+.crit-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+.crit-desc{background:var(--primary-100);color:var(--text);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.9;margin-top:4px;}
+.crit-preview{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:13px;}
+.crit-preview input{width:110px;}
+.band-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px;}
+.band-row input{width:84px;}
+.crit-err{color:var(--red);font-size:12px;font-weight:700;margin-top:4px;}
+.mono{font-family:ui-monospace,Consolas,monospace;direction:ltr;text-align:left;}
+.scheme-table td,.scheme-table th{vertical-align:top;}
+
+@media print{
+  .sidebar,.topbar,.no-print,.page-head,.breadcrumb,.mobile-scrim,#toastWrap{display:none !important;}
+  .shell,.main{display:block !important;}
+  .content{padding:0 !important;}
+  body{background:#fff;}
+  .card{box-shadow:none !important;}
+  body:has(#studentModal) .shell{display:none !important;}
+  #studentModal{position:static !important;background:none !important;padding:0 !important;}
+  #studentModal .modal{box-shadow:none !important;max-height:none !important;max-width:100% !important;}
+  #studentModal .modal-foot,#studentModal .icon-btn{display:none !important;}
+}
 </style>
 </head>
 <body>
@@ -293,12 +317,12 @@ function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
 
 /* ================================ DB (local) ================================ */
 const DB = {
-  KEY:'miyar_academic_perf_v6',
+  KEY:'miyar_academic_perf_v7',
   data:null,
   load(){
     try{
       const raw = localStorage.getItem(this.KEY);
-      if(raw){ this.data = JSON.parse(raw); return; }
+      if(raw){ this.data = JSON.parse(raw); this.data.schemes = this.data.schemes || {}; (this.data.students||[]).forEach(ensureScores); return; }
     }catch(e){ }
     this.data = seedData();
     this.save();
@@ -312,7 +336,6 @@ const DB = {
 };
 
 const DEFAULT_SETTINGS = {
-  weights:{ attendance:0.25, activities:0.20, exercises:0.20, midterm:0.20, evaluation:0.15 },
   greenMin:82, yellowMin:60,
   grayAttendanceMax:15,
   actions:{
@@ -322,6 +345,181 @@ const DEFAULT_SETTINGS = {
     gray:'التواصل الفوري مع الطالب للاستفسار عن سبب الانقطاع، وتوثيق الحالة أكاديميًا وإداريًا.'
   }
 };
+
+/* ================================ Evaluation scheme (dynamic criteria) ================================ */
+/* كل شعبة لها «مقياس تقييم» يضبطه مدرس المادة: لكل معيار وزن + حد أعظم للدرجة الخام + آلية حساب. */
+const CRITERIA = [
+  {key:'attendance', label:'الحضور',          raw:'عدد ساعات الحضور',    unit:'ساعة',  maxLabel:'إجمالي ساعات المقرر'},
+  {key:'activities', label:'الأنشطة',         raw:'درجة الأنشطة',        unit:'درجة', maxLabel:'الدرجة العظمى للأنشطة'},
+  {key:'exercises',  label:'التمارين',        raw:'درجة التمارين',       unit:'درجة', maxLabel:'الدرجة العظمى للتمارين'},
+  {key:'homework',   label:'الواجب الورقي',   raw:'درجة الواجب الورقي',  unit:'درجة', maxLabel:'الدرجة العظمى للواجب الورقي'},
+  {key:'midterm',    label:'اختبار المنتصف',  raw:'درجة المنتصف',        unit:'درجة', maxLabel:'الدرجة العظمى لاختبار المنتصف'},
+  {key:'evaluation', label:'تقييم المدرس',    raw:'تقييم المدرس',        unit:'درجة', maxLabel:'الدرجة العظمى لتقييم المدرس'},
+];
+const METHODS = {
+  linear:{ label:'نسبي مباشر' },
+  cap:   { label:'نسبي مع حدّ إتقان' },
+  bands: { label:'شرائح (مستويات)' },
+  deduct:{ label:'خصم من الدرجة الكاملة' },
+  custom:{ label:'معادلة مخصصة' },
+};
+function n0(v){ const n = parseFloat(v); return Number.isFinite(n) ? n : 0; }
+function fmtN(n){ const v = Math.round(n0(n)*10)/10; return String(v); }
+function escHtml(s){ return String(s ?? '').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function cloneJSON(o){ return JSON.parse(JSON.stringify(o)); }
+
+function defaultCriterion(weight, max){
+  return { weight, max, method:'linear', capPct:80, perUnit: max>0 ? Math.round(weight/max*100)/100 : 1, formula:'w * p',
+           bands:[{min:90,pct:100},{min:75,pct:85},{min:60,pct:70},{min:50,pct:55},{min:0,pct:0}] };
+}
+const DEFAULT_SCHEME = { criteria:{
+  attendance: defaultCriterion(15,30),
+  activities: defaultCriterion(10,10),
+  exercises:  defaultCriterion(15,15),
+  homework:   defaultCriterion(10,10),
+  midterm:    defaultCriterion(30,30),
+  evaluation: defaultCriterion(20,20),
+}};
+
+/* ---- محرّك المعادلات المخصصة (آمن: قائمة بيضاء للرموز والدوال فقط) ---- */
+const FORMULA_FUNCS = { min:Math.min, max:Math.max, sqrt:Math.sqrt, abs:Math.abs, round:Math.round, floor:Math.floor, ceil:Math.ceil, pow:Math.pow, iff:(c,a,b)=>(c?a:b) };
+const _formulaCache = new Map();
+function compileFormula(src){
+  let s = String(src ?? '').trim();
+  if(!s) throw new Error('المعادلة فارغة');
+  s = s.replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/٫/g,'.').replace(/،/g,',').replace(/×/g,'*').replace(/÷/g,'/').replace(/\bif\s*\(/g,'iff(');
+  if(s.length > 200) throw new Error('المعادلة طويلة جدًا');
+  if(_formulaCache.has(s)) return _formulaCache.get(s);
+  const allowed = new Set(['x','m','w','p', ...Object.keys(FORMULA_FUNCS)]);
+  for(const id of (s.match(/[A-Za-z_]\w*/g) || [])){ if(!allowed.has(id)) throw new Error('رمز غير مسموح في المعادلة: '+id); }
+  if(/[^0-9A-Za-z_+\-*/%().,<>=!&|?:\s]/.test(s)) throw new Error('المعادلة تحتوي على رموز غير مسموحة');
+  if(/[^0-9]\.|\.[^0-9]/.test(s)) throw new Error('صيغة الأرقام العشرية غير صحيحة');
+  if(s.replace(/===|!==|==|!=|<=|>=/g,'').includes('=')) throw new Error('علامة = غير مسموحة (استخدم == للمقارنة)');
+  let fn;
+  try{ fn = new Function('x','m','w','p','F','"use strict"; const {min,max,sqrt,abs,round,floor,ceil,pow,iff}=F; return ('+s+');'); }
+  catch(e){ throw new Error('صيغة المعادلة غير صحيحة'); }
+  _formulaCache.set(s, fn);
+  return fn;
+}
+function runFormula(src, vars){
+  try{
+    const fn = compileFormula(src);
+    const v = fn(vars.x, vars.m, vars.w, vars.p, FORMULA_FUNCS);
+    if(typeof v !== 'number' || !Number.isFinite(v)) return {error:'ناتج المعادلة ليس رقمًا صالحًا'};
+    return {value:v};
+  }catch(e){ return {error: e.message || 'خطأ في المعادلة'}; }
+}
+
+/* ---- حساب الدرجة المكتسبة لمعيار واحد وفق الآلية المختارة ---- */
+function evalCriterion(c, raw){
+  const w = Math.max(0, n0(c.weight)), m = n0(c.max);
+  const x = Math.max(0, n0(raw));
+  const p = m > 0 ? x/m : 0;
+  let earned = 0, err = null;
+  switch(c.method){
+    case 'cap': {
+      const cp = Math.min(100, Math.max(1, n0(c.capPct) || 100))/100;
+      earned = Math.min(p/cp, 1) * w; break;
+    }
+    case 'bands': {
+      const pp = p*100;
+      const bs = (Array.isArray(c.bands)? c.bands : []).slice().sort((a,b)=>n0(b.min)-n0(a.min));
+      const hit = bs.find(b=> pp >= n0(b.min) - 1e-9);
+      earned = hit ? (n0(hit.pct)/100) * w : 0; break;
+    }
+    case 'deduct': {
+      earned = w - Math.max(0, m - x) * n0(c.perUnit); break;
+    }
+    case 'custom': {
+      const r = runFormula(c.formula, {x, m, w, p});
+      if(r.error){ err = r.error; earned = 0; } else earned = r.value;
+      break;
+    }
+    default: earned = Math.min(p, 1) * w;
+  }
+  if(!Number.isFinite(earned)) earned = 0;
+  earned = Math.round(Math.max(0, Math.min(w, earned))*100)/100;
+  return { earned, weight:w, pct: w>0 ? earned/w*100 : 0, p, err };
+}
+
+/* ---- وصف الآلية المختارة بلغة مقروءة (يُستخدم في صفحة المعايير والتقارير) ---- */
+function describeCriterion(c){
+  const w = fmtN(c.weight), m = fmtN(c.max);
+  const name = (METHODS[c.method] || METHODS.linear).label;
+  let lines = [];
+  switch(c.method){
+    case 'cap':
+      lines = [`درجة كاملة (${w}) عند بلوغ ${fmtN(c.capPct)}% من ${m}، وتناسبيًا قبل ذلك: (الدرجة ÷ (${m} × ${fmtN(c.capPct)}%)) × ${w}`]; break;
+    case 'bands': {
+      const bs = (Array.isArray(c.bands)? c.bands : []).slice().sort((a,b)=>n0(b.min)-n0(a.min));
+      lines = bs.map(b=>`إذا بلغت النسبة ≥ ${fmtN(b.min)}% من ${m} ← ${fmtN(b.pct)}% من الوزن (${fmtN(n0(c.weight)*n0(b.pct)/100)})`);
+      if(!lines.length) lines = ['لا توجد شرائح معرّفة']; break;
+    }
+    case 'deduct':
+      lines = [`${w} − ((${m} − الدرجة) × ${fmtN(c.perUnit)})، وبحدّ أدنى صفر`]; break;
+    case 'custom':
+      lines = [`المعادلة: ${c.formula}  (x = الدرجة الخام، m = الحد الأعظم ${m}، w = الوزن ${w}، p = x ÷ m)`]; break;
+    default:
+      lines = [`(الدرجة ÷ ${m}) × ${w}`];
+  }
+  return { name, lines, html: lines.map(escHtml).join('<br>'), plain: lines.join('؛ ') };
+}
+
+/* ---- قراءة مقياس شعبة (مع تطبيع وكاش) ---- */
+const _schemeCache = new WeakMap();
+let _defaultSchemeNorm = null;
+function normalizeScheme(sc){
+  const out = cloneJSON(DEFAULT_SCHEME);
+  if(!sc || !sc.criteria) return out;
+  CRITERIA.forEach(cr=>{
+    const src = sc.criteria[cr.key]; if(!src) return;
+    const d = out.criteria[cr.key];
+    ['weight','max','capPct','perUnit'].forEach(f=>{ if(src[f] !== undefined && src[f] !== '' && Number.isFinite(parseFloat(src[f]))) d[f] = parseFloat(src[f]); });
+    if(METHODS[src.method]) d.method = src.method;
+    if(typeof src.formula === 'string' && src.formula.trim()) d.formula = src.formula;
+    if(src.bands){
+      const arr = Array.isArray(src.bands) ? src.bands : Object.values(src.bands);
+      const clean = arr.filter(b=>b && Number.isFinite(parseFloat(b.min)) && Number.isFinite(parseFloat(b.pct))).map(b=>({min:parseFloat(b.min), pct:parseFloat(b.pct)}));
+      if(clean.length) d.bands = clean;
+    }
+  });
+  out.updatedAt = sc.updatedAt; out.updatedBy = sc.updatedBy;
+  return out;
+}
+function getScheme(sectionId){
+  const raw = DB.data && DB.data.schemes ? DB.data.schemes[sectionId] : null;
+  if(!raw){ if(!_defaultSchemeNorm) _defaultSchemeNorm = normalizeScheme(null); return _defaultSchemeNorm; }
+  let n = _schemeCache.get(raw);
+  if(!n){ n = normalizeScheme(raw); _schemeCache.set(raw, n); }
+  return n;
+}
+function saveScheme(sectionId, scheme){
+  const copy = cloneJSON(scheme);
+  copy.updatedAt = new Date().toISOString();
+  copy.updatedBy = S.user ? S.user.name : '';
+  DB.data.schemes = DB.data.schemes || {};
+  DB.data.schemes[sectionId] = copy;
+  DB.save();
+}
+
+/* ---- ترحيل بيانات الهيكل القديم (إن وُجدت) إلى الهيكل الجديد ---- */
+function ensureScores(s){
+  if(!s || s.scores) return s;
+  const a=s.attendance||{}, ac=s.activities||{}, ex=s.exercises||{}, mi=s.midterm||{}, ev=s.evaluation||{};
+  const D = DEFAULT_SCHEME.criteria;
+  const pc = (p,k)=> Math.round(n0(p)/100*D[k].max*2)/2;
+  s.scores = {
+    attendance: a.total ? Math.round(n0(a.attended)/a.total*D.attendance.max) : 0,
+    activities: pc((n0(ac.activity)+n0(ac.assignment)+n0(ac.participation))/3,'activities'),
+    exercises:  pc(ex.pct,'exercises'),
+    homework:   pc(ac.assignment,'homework'),
+    midterm:    mi.max ? Math.round(n0(mi.score)/mi.max*D.midterm.max*2)/2 : 0,
+    evaluation: pc((n0(ev.score)+n0(ev.participation)+n0(ev.engagement))/3,'evaluation'),
+  };
+  if(s.comment === undefined) s.comment = ev.comment || '';
+  delete s.attendance; delete s.activities; delete s.exercises; delete s.midterm; delete s.evaluation; delete s.history;
+  return s;
+}
 
 function seedData(){
   const courses = [
@@ -353,53 +551,46 @@ function seedData(){
 
   const students=[];
   let sid=2044001;
+  const D = DEFAULT_SCHEME.criteria;
+  const rawFrom = (pctLo,pctHi,key)=>{ const pct = ri(pctLo,pctHi); return Math.round(pct/100*D[key].max*2)/2; };
   sections.forEach(sec=>{
     const count = ri(13,17);
     for(let i=0;i<count;i++){
       const name = pick(firstNames)+' '+pick(lastNames);
       const studentId = String(sid++);
       const arche = weightedPick([['green',0.42],['yellow',0.28],['red',0.18],['gray',0.12]]);
-      let totalClasses = ri(26,30), attended, activity, assignment, participation, exAvg, weakEx, exPct, midScore, midMax=40, evalScore, evalPart, evalEng, comment;
-      if(arche==='gray'){
-        attended = ri(0, Math.floor(totalClasses*0.12));
-        activity = ri(0,30); assignment= ri(0,30); participation= ri(0,25);
-        exAvg = ri(0,35); weakEx = ri(5,9); exPct = ri(0,35);
-        midScore = ri(0,10); evalScore= ri(0,30); evalPart= ri(0,25); evalEng= ri(0,25);
-        comment = 'الطالب منقطع عن الحضور منذ فترة، لم يتم التواصل معه بعد.';
-      } else if(arche==='green'){
-        attended = ri(Math.floor(totalClasses*0.88), totalClasses);
-        activity = ri(85,100); assignment= ri(85,100); participation= ri(80,100);
-        exAvg = ri(82,98); weakEx = ri(0,1); exPct = ri(85,99);
-        midScore = ri(33,40); evalScore= ri(85,100); evalPart= ri(85,100); evalEng= ri(85,100);
-        comment = 'طالب ملتزم ومتفاعل، يحافظ على مستوى أداء ممتاز.';
-      } else if(arche==='yellow'){
-        attended = ri(Math.floor(totalClasses*0.72), Math.floor(totalClasses*0.87));
-        activity = ri(60,78); assignment= ri(58,77); participation= ri(55,75);
-        exAvg = ri(58,74); weakEx = ri(2,4); exPct = ri(58,75);
-        midScore = ri(22,29); evalScore= ri(60,76); evalPart= ri(58,75); evalEng= ri(58,76);
-        comment = 'يلاحظ تراجع بسيط في الواجبات، بحاجة لمتابعة دورية.';
-      } else {
-        attended = ri(Math.floor(totalClasses*0.4), Math.floor(totalClasses*0.68));
-        activity = ri(25,52); assignment= ri(20,50); participation= ri(20,48);
-        exAvg = ri(25,50); weakEx = ri(4,7); exPct = ri(25,52);
-        midScore = ri(8,19); evalScore= ri(30,52); evalPart= ri(28,50); evalEng= ri(28,50);
-        comment = 'ضعف واضح في المؤشرات، يحتاج تدخلًا أكاديميًا عاجلًا.';
-      }
-      const history = buildHistory(arche);
+      const R = {green:{att:[90,100],act:[85,100],ex:[80,98],hw:[85,100],mid:[80,98],ev:[85,100]},
+                 yellow:{att:[72,87],act:[58,77],ex:[58,75],hw:[55,76],mid:[55,74],ev:[60,76]},
+                 red:{att:[40,68],act:[25,52],ex:[25,52],hw:[20,50],mid:[25,48],ev:[30,52]},
+                 gray:{att:[0,12],act:[0,35],ex:[0,35],hw:[0,30],mid:[0,28],ev:[0,30]}}[arche];
+      const scores = {
+        attendance: rawFrom(R.att[0],R.att[1],'attendance'),
+        activities: rawFrom(R.act[0],R.act[1],'activities'),
+        exercises:  rawFrom(R.ex[0],R.ex[1],'exercises'),
+        homework:   rawFrom(R.hw[0],R.hw[1],'homework'),
+        midterm:    rawFrom(R.mid[0],R.mid[1],'midterm'),
+        evaluation: rawFrom(R.ev[0],R.ev[1],'evaluation'),
+      };
+      const comment = {green:'طالب ملتزم ومتفاعل، يحافظ على مستوى أداء ممتاز.', yellow:'يلاحظ تراجع بسيط في الواجبات، بحاجة لمتابعة دورية.',
+                       red:'ضعف واضح في المؤشرات، يحتاج تدخلًا أكاديميًا عاجلًا.', gray:'الطالب منقطع عن الحضور منذ فترة، لم يتم التواصل معه بعد.'}[arche];
       students.push({
         id: uid('stu'), studentId, name, courseId:sec.courseId, sectionId:sec.id, level:'السنة الأولى المشتركة',
-        attendance:{ total: totalClasses, attended, absent: totalClasses-attended },
-        activities:{ activity, assignment, participation },
-        exercises:{ avg: exAvg, weak: weakEx, pct: exPct },
-        midterm:{ score: midScore, max: midMax },
-        evaluation:{ score: evalScore, participation: evalPart, engagement: evalEng, comment },
+        scores, comment,
         notes: arche==='red' ? 'تم رصد ضعف متكرر في التمارين والحضور.' : (arche==='gray' ? 'قيد المراجعة الإدارية — لم يتم التواصل بعد.' : ''),
         interventions: arche==='red' ? [{id:uid('iv'),type:'إرشاد أكاديمي',date:daysAgoISO(ri(2,10)),instructor:'',action:'اجتماع فردي لمناقشة أسباب التراجع',follow:daysAgoISO(-ri(3,9)),status:'قيد المتابعة',notes:'تم الاتفاق على خطة أسبوعية للتمارين.'}] : (arche==='gray' ? [{id:uid('iv'),type:'محاولة تواصل',date:daysAgoISO(ri(1,5)),instructor:'',action:'اتصال هاتفي لم يتم الرد عليه',follow:daysAgoISO(-ri(1,4)),status:'مفتوح',notes:'يُنصح بالتواصل عبر عمادة القبول والتسجيل.'}] : []),
-        history,
         createdAt: daysAgoISO(ri(20,90))
       });
     }
   });
+
+  /* مقياس التقييم لكل شعبة (الافتراضي نسبي مباشر). شعبة تجريبية واحدة تُظهر الآليات الأخرى. */
+  const schemes = {};
+  sections.forEach(sec=>{ schemes[sec.id] = cloneJSON(DEFAULT_SCHEME); });
+  if(sections[2]){
+    const demo = schemes[sections[2].id].criteria;
+    demo.attendance.method = 'bands';
+    demo.exercises.method = 'cap'; demo.exercises.capPct = 85;
+  }
 
   const users = [
     {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin: daysAgoISO(0)},
@@ -415,42 +606,31 @@ function seedData(){
   ];
 
   return {
-    courses, sections, instructors, students, users, auditLogs,
+    courses, sections, instructors, students, users, auditLogs, schemes,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-    meta:{ version:'3.0.0', seededAt: new Date().toISOString() }
+    meta:{ version:'4.0.0', seededAt: new Date().toISOString() }
   };
 }
 function weightedPick(pairs){ const r=rnd(); let acc=0; for(const [k,w] of pairs){acc+=w; if(r<=acc) return k;} return pairs[pairs.length-1][0]; }
 function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
-function buildHistory(arche){
-  const pts=[]; let base = arche==='green'?78:arche==='yellow'?62:arche==='gray'?55:48;
-  for(let w=1; w<=6; w++){
-    let drift;
-    if(arche==='green') drift = ri(-2,4);
-    else if(arche==='yellow') drift = ri(-3,3);
-    else if(arche==='red') drift = ri(-4,2);
-    else drift = w<=2 ? ri(-2,2) : -ri(8,16);
-    base = Math.max(0, Math.min(100, base+drift));
-    pts.push({label:'أسبوع '+w, value: Math.round(base)});
-  }
-  return pts;
-}
-
 /* ================================ Classification engine ================================ */
+/* الدرجة الكلية = مجموع الدرجات المكتسبة ÷ مجموع الأوزان × 100، وتُحسب كل درجة وفق آلية المعيار التي اختارها المدرس. */
 function classify(student, settings){
   settings = settings || DB.data.settings;
-  const attRate = student.attendance.total>0 ? (student.attendance.attended/student.attendance.total*100) : 0;
-  if(attRate <= settings.grayAttendanceMax){
-    return {status:'gray', score: Math.round(attRate), attRate};
-  }
-  const actScore = (student.activities.activity + student.activities.assignment + student.activities.participation)/3;
-  const exScore = student.exercises.pct;
-  const midScore = student.midterm.max>0 ? (student.midterm.score/student.midterm.max*100) : 0;
-  const evalScore = (student.evaluation.score + student.evaluation.participation + student.evaluation.engagement)/3;
-  const w = settings.weights;
-  const weighted = attRate*w.attendance + actScore*w.activities + exScore*w.exercises + midScore*w.midterm + evalScore*w.evaluation;
-  let status = weighted>=settings.greenMin ? 'green' : (weighted>=settings.yellowMin ? 'yellow' : 'red');
-  return {status, score: Math.round(weighted), attRate: Math.round(attRate)};
+  const scheme = getScheme(student.sectionId);
+  const raw = student.scores || {};
+  const cA = scheme.criteria.attendance;
+  const attRate = cA.max > 0 ? Math.max(0, Math.min(100, n0(raw.attendance)/cA.max*100)) : 100;
+  const parts = {}; let earned = 0, totalW = 0;
+  CRITERIA.forEach(cr=>{
+    const r = evalCriterion(scheme.criteria[cr.key], raw[cr.key]);
+    parts[cr.key] = r; earned += r.earned; totalW += r.weight;
+  });
+  const score = totalW > 0 ? earned/totalW*100 : 0;
+  const base = { score: Math.round(score), attRate: Math.round(attRate), parts, earned, totalW, scheme };
+  if(attRate <= settings.grayAttendanceMax) return Object.assign({status:'gray'}, base, {score: Math.round(score)});
+  const status = score >= settings.greenMin ? 'green' : (score >= settings.yellowMin ? 'yellow' : 'red');
+  return Object.assign({status}, base);
 }
 const STATUS_LABEL = {green:'أخضر · مستقر', yellow:'أصفر · يحتاج متابعة', red:'أحمر · تدخل عاجل', gray:'رمادي · غائب/منقطع'};
 const STATUS_SHORT = {green:'أخضر', yellow:'أصفر', red:'أحمر', gray:'رمادي'};
@@ -554,7 +734,7 @@ function doLogout(){
 }
 
 /* ================================ Navigation ================================ */
-function go(route, params){ S.route=route; S.params=params||{}; S.sidebarOpen=false; render(); window.scrollTo(0,0); }
+function go(route, params){ if(route!=='scheme') S.schemeDraft=null; S.route=route; S.params=params||{}; S.sidebarOpen=false; render(); window.scrollTo(0,0); }
 
 function navItems(){
   if(S.user.role==='admin'){
@@ -566,6 +746,7 @@ function navItems(){
       {id:'courses', label:'المقررات', icon:ICON.book},
       {id:'sections', label:'الشعب', icon:ICON.layers},
       {id:'students', label:'الطلبة', icon:ICON.grad},
+      {id:'scheme', label:'معايير التقييم', icon:ICON.target},
       {id:'comparison', label:'مقارنة المقررات', icon:ICON.chart},
       {sec:'التقارير والنظام'},
       {id:'reports', label:'التقارير', icon:ICON.report},
@@ -580,6 +761,7 @@ function navItems(){
     {id:'alerts', label:'التنبيهات الأكاديمية', icon:ICON.bell},
     {sec:'شعبتي'},
     {id:'students', label:'بيانات الطلبة', icon:ICON.grad},
+    {id:'scheme', label:'معايير التقييم', icon:ICON.target},
     {id:'reports', label:'تقرير الشعبة', icon:ICON.report},
   ];
 }
@@ -593,7 +775,8 @@ const ROUTE_META = {
   reports:{title:'التقارير', desc:'إنشاء تقارير مفصلة وتصديرها.'},
   users:{title:'إدارة المستخدمين', desc:'حسابات المدراء والمدرسين وصلاحياتهم.'},
   audit:{title:'سجل النشاطات', desc:'آخر العمليات التي تمت داخل النظام.'},
-  settings:{title:'الإعدادات', desc:'ضبط معايير التصنيف والإجراءات الموصى بها.'},
+  settings:{title:'الإعدادات', desc:'ضبط حدود التصنيف والإجراءات الموصى بها.'},
+  scheme:{title:'معايير التقييم', desc:'حدّد وزن كل معيار وآلية حساب درجته من النسبة الكلية للشعبة.'},
 };
 
 /* ================================ Render root ================================ */
@@ -656,10 +839,11 @@ function breadcrumb(){
 }
 function pageActionsForRoute(){
   if(S.route==='students') return `
-    <button type="button" class="btn btn-primary" id="importExcelBtn" style="background:linear-gradient(135deg,#059669,#047857);">${ICON.upload} استيراد Excel (إعادة تهيئة شاملة)</button>
+    <button type="button" class="btn btn-primary" id="importExcelBtn" style="background:linear-gradient(135deg,#059669,#047857);">${ICON.upload} استيراد ملف Excel</button>
+    <button type="button" class="btn btn-outline" id="downloadTemplateBtn">${ICON.file} تنزيل القالب</button>
     <button type="button" class="btn btn-outline" id="exportStudentsBtn">${ICON.download} تصدير Excel</button>
-    <button type="button" class="btn btn-danger btn-sm" id="deleteAllStudentsBtn" style="padding:10px 12px;">${ICON.trash} حذف الكل</button>
     <button type="button" class="btn btn-outline" id="addStudentBtn">${ICON.plus} إضافة طالب</button>
+    <button type="button" class="btn btn-danger btn-sm" id="deleteAllStudentsBtn" style="padding:10px 12px;">${ICON.trash} حذف الكل</button>
     <input type="file" id="excelFileInput" accept=".csv,.txt,.xlsx,.xls" style="display:none">`;
   if(S.route==='courses') return `<button type="button" class="btn btn-primary" id="addCourseBtn">${ICON.plus} إضافة مقرر</button>`;
   if(S.route==='sections') return `<button type="button" class="btn btn-primary" id="addSectionBtn">${ICON.plus} إضافة شعبة</button>`;
@@ -679,6 +863,7 @@ function renderRoute(){
   else if(S.route==='users') html += usersView();
   else if(S.route==='audit') html += auditView();
   else if(S.route==='settings') html += settingsView();
+  else if(S.route==='scheme') html += schemeView();
   c.innerHTML = html;
   const pageActions = document.getElementById('pageActions');
   if(pageActions) pageActions.innerHTML = pageActionsForRoute();
@@ -929,7 +1114,7 @@ function instructorDashboard(){
       <button class="btn btn-primary" id="qaAddStudent">${ICON.plus} إضافة طالب</button>
       <button class="btn btn-outline" data-nav="students">${ICON.grad} بيانات الطلبة</button>
       <button class="btn btn-outline" data-nav="reports">${ICON.report} تقرير الشعبة</button>
-      <button class="btn btn-outline" id="qaEval">${ICON.edit} تقييم عضو التدريس</button>
+      <button class="btn btn-outline" data-nav="scheme">${ICON.target} معايير التقييم</button>
     </div>
   </div>`;
 }
@@ -1024,20 +1209,27 @@ function sectionsView(){
 }
 
 /* ================================ STUDENTS ================================ */
+function critCell(cr, s, r){
+  const p = r.parts[cr.key], c = r.scheme.criteria[cr.key];
+  return `<div style="font-weight:700;">${fmtN(p.earned)}<span class="table-sub" style="font-weight:500;"> / ${fmtN(p.weight)}</span></div>
+          <div class="table-sub">خام ${fmtN((s.scores||{})[cr.key])}/${fmtN(c.max)}</div>`;
+}
 function studentsView(){
   const inst = currentInstructor();
   const base = scopedStudents();
   const f = S.studentFilters;
-  let list = base.filter(s=>{
-    if(f.q && !(s.name.includes(f.q)||s.studentId.includes(f.q))) return false;
-    if(f.status!=='all' && classify(s).status!==f.status) return false;
+  const rows = base.map(s=>({s, r:classify(s)}));
+  let list = rows.filter(({s,r})=>{
+    if(f.q && !(s.name.includes(f.q)||String(s.studentId).includes(f.q))) return false;
+    if(f.status!=='all' && r.status!==f.status) return false;
     if(!inst && f.sectionId!=='all' && s.sectionId!==f.sectionId) return false;
     return true;
   });
   list.sort((a,b)=>{
-    if(f.sort==='name') return a.name.localeCompare(b.name,'ar');
-    if(f.sort==='status'){ const order={red:0,gray:1,yellow:2,green:3}; return order[classify(a).status]-order[classify(b).status]; }
-    if(f.sort==='attendance') return classify(b).attRate - classify(a).attRate;
+    if(f.sort==='name') return a.s.name.localeCompare(b.s.name,'ar');
+    if(f.sort==='status'){ const order={red:0,gray:1,yellow:2,green:3}; return order[a.r.status]-order[b.r.status]; }
+    if(f.sort==='attendance') return b.r.attRate - a.r.attRate;
+    if(f.sort==='score') return b.r.score - a.r.score;
     return 0;
   });
   const pageSize=10; const totalPages=Math.max(1,Math.ceil(list.length/pageSize));
@@ -1049,7 +1241,7 @@ function studentsView(){
   return `
   <div class="card" style="padding:14px 16px;margin-bottom:14px;">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <div class="search-box" style="min-width:220px;"><span>${ICON.search}</span><input id="stuSearch" placeholder="ابحث بالاسم أو الرقم الجامعي" value="${f.q}"></div>
+      <div class="search-box" style="min-width:220px;"><span>${ICON.search}</span><input id="stuSearch" placeholder="ابحث بالاسم أو الرقم الجامعي" value="${escHtml(f.q)}"></div>
       <select id="filterStatus" style="width:auto;min-width:160px;">
         <option value="all" ${f.status==='all'?'selected':''}>كل الحالات</option>
         <option value="green" ${f.status==='green'?'selected':''}>🟢 أخضر</option>
@@ -1062,28 +1254,23 @@ function studentsView(){
         <option value="name" ${f.sort==='name'?'selected':''}>ترتيب: الاسم</option>
         <option value="status" ${f.sort==='status'?'selected':''}>ترتيب: الحالة</option>
         <option value="attendance" ${f.sort==='attendance'?'selected':''}>ترتيب: الحضور</option>
+        <option value="score" ${f.sort==='score'?'selected':''}>ترتيب: الدرجة الكلية</option>
       </select>
       <div class="tag-pill" style="margin-inline-start:auto;">${list.length} نتيجة</div>
     </div>
   </div>
   <div class="card">
     <div class="scrollx"><table class="responsive-cards">
-      <thead><tr><th>الرقم الجامعي</th><th>اسم الطالب</th><th>الحضور</th><th>الأنشطة</th><th>التمارين</th><th>المنتصف</th><th>تقييم المدرس</th><th>الحالة</th><th></th></tr></thead>
+      <thead><tr><th>الرقم الجامعي</th><th>اسم الطالب</th>${CRITERIA.map(cr=>`<th>${cr.label}</th>`).join('')}<th>المجموع</th><th>الحالة</th><th></th></tr></thead>
       <tbody>
-      ${pageList.length? pageList.map(s=>{
-        const r = classify(s);
-        const actAvg = Math.round((s.activities.activity+s.activities.assignment+s.activities.participation)/3);
-        const evalAvg = Math.round((s.evaluation.score+s.evaluation.participation+s.evaluation.engagement)/3);
+      ${pageList.length? pageList.map(({s,r})=>{
         const crs = courseOf(s.courseId);
         const sec = sectionOf(s.sectionId);
         return `<tr data-student="${s.id}">
-          <td data-label="الرقم الجامعي">${s.studentId}</td>
-          <td data-label="الاسم"><div class="table-name">${s.name}</div><div class="table-sub">${crs?crs.name:''} — ${sec?sec.number:''}</div></td>
-          <td data-label="الحضور">${r.attRate}%</td>
-          <td data-label="الأنشطة">${actAvg}%</td>
-          <td data-label="التمارين">${s.exercises.pct}%</td>
-          <td data-label="المنتصف">${s.midterm.score}/${s.midterm.max}</td>
-          <td data-label="تقييم المدرس">${evalAvg}%</td>
+          <td data-label="الرقم الجامعي">${escHtml(s.studentId)}</td>
+          <td data-label="الاسم"><div class="table-name">${escHtml(s.name)}</div><div class="table-sub">${crs?crs.name:''} — ${sec?sec.number:''}</div></td>
+          ${CRITERIA.map(cr=>`<td data-label="${cr.label}">${critCell(cr,s,r)}</td>`).join('')}
+          <td data-label="المجموع"><b>${r.score}%</b></td>
           <td data-label="الحالة">${badgeHTML(r.status)}</td>
           <td data-label=""><div style="display:flex;gap:6px;" onclick="event.stopPropagation()">
             <button class="iconbtn-sm" data-view-student="${s.id}" title="عرض">${ICON.eye}</button>
@@ -1091,7 +1278,7 @@ function studentsView(){
             <button class="iconbtn-sm" data-del-student="${s.id}" title="حذف">${ICON.trash}</button>
           </div></td>
         </tr>`;
-      }).join('') : `<tr><td colspan="9"><div class="empty">${ICON.search}<div>لا توجد نتائج مطابقة لبحثك</div></div></td></tr>`}
+      }).join('') : `<tr><td colspan="${CRITERIA.length+5}"><div class="empty">${ICON.search}<div>لا توجد نتائج مطابقة — يمكنك استيراد ملف Excel بالزر أعلاه</div></div></td></tr>`}
       </tbody>
     </table></div>
     ${totalPages>1?`<div style="display:flex;justify-content:center;gap:6px;padding:14px;">
@@ -1101,44 +1288,56 @@ function studentsView(){
 }
 
 /* ================================ STUDENT DETAIL MODAL ================================ */
+function criteriaBreakdownTable(s, r){
+  return `<div class="scrollx"><table class="scheme-table"><thead><tr><th>المعيار</th><th>الدرجة الخام</th><th>الحد الأعظم</th><th>الآلية المعتمدة</th><th>المكتسب / الوزن</th></tr></thead><tbody>
+    ${CRITERIA.map(cr=>{
+      const c = r.scheme.criteria[cr.key], p = r.parts[cr.key], d = describeCriterion(c);
+      return `<tr><td><b>${cr.label}</b></td><td>${fmtN((s.scores||{})[cr.key])} ${cr.unit==='ساعة'?'ساعة':''}</td><td>${fmtN(c.max)}</td>
+        <td><div style="font-weight:700;">${d.name}</div><div class="table-sub">${d.html}</div></td>
+        <td><b>${fmtN(p.earned)}</b> / ${fmtN(p.weight)}${p.err?`<div class="table-sub" style="color:var(--red);">${escHtml(p.err)}</div>`:''}</td></tr>`;
+    }).join('')}
+    <tr style="background:var(--surface-2);"><td colspan="4"><b>المجموع (من ${fmtN(r.totalW)})</b></td><td><b>${fmtN(r.earned)}</b> — ${r.score}%</td></tr>
+  </tbody></table></div>`;
+}
 function openStudentDetail(id){
   const s = DB.data.students.find(x=>x.id===id); if(!s) return;
   const r = classify(s); const c=courseOf(s.courseId), sec=sectionOf(s.sectionId);
   const settings = DB.data.settings;
-  const actAvg = Math.round((s.activities.activity+s.activities.assignment+s.activities.participation)/3);
   const ov = document.createElement('div'); ov.className='overlay'; ov.id='studentModal';
   ov.innerHTML = `<div class="modal modal-lg">
     <div class="modal-head">
       <div style="display:flex;align-items:center;gap:12px;">
-        <div class="avatar" style="width:44px;height:44px;">${s.name.trim().slice(-2)}</div>
-        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${s.name}</div><div class="table-sub">${s.studentId} — ${c?c.name:''} — شعبة ${sec?sec.number:''} — ${sec?instructorOf(sec.instructorId)?.name||'':''}</div></div>
+        <div class="avatar" style="width:44px;height:44px;">${escHtml(s.name.trim().slice(-2))}</div>
+        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${escHtml(s.name)}</div><div class="table-sub">${escHtml(s.studentId)} — ${c?c.name:''} — شعبة ${sec?sec.number:''} — ${sec?instructorOf(sec.instructorId)?.name||'':''}</div></div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">${badgeHTML(r.status,true)}<button class="icon-btn" id="closeStudentModal">${ICON.x}</button></div>
     </div>
     <div class="modal-body">
       ${r.status==='gray'?`<div style="background:var(--gray-bg);color:var(--gray);border-radius:10px;padding:10px 14px;font-size:12.5px;font-weight:700;margin-bottom:14px;display:flex;gap:8px;align-items:center;">${ICON.alert} هذا الطالب مصنَّف رماديًا: نسبة الحضور ${r.attRate}% (أقل من أو تساوي ${settings.grayAttendanceMax}%) — يُعامل كحالة غياب/انقطاع.</div>`:''}
       <div class="grid g-4" style="margin-bottom:16px;">
-        ${miniStat('الحضور', r.attRate+'%')}
-        ${miniStat('الأنشطة', actAvg+'%')}
-        ${miniStat('التمارين', s.exercises.pct+'%')}
-        ${miniStat('المنتصف', s.midterm.score+'/'+s.midterm.max)}
+        ${miniStat('الدرجة الكلية', r.score+'%')}
+        ${miniStat('نسبة الحضور', r.attRate+'%')}
+        ${miniStat('المكتسب', fmtN(r.earned)+' / '+fmtN(r.totalW))}
+        ${miniStat('الحالة', STATUS_SHORT[r.status])}
       </div>
-      <h4 class="font-head" style="font-size:14px;margin:18px 0 10px;">مسار الأداء عبر الفصل الدراسي</h4>
-      <div style="height:180px;"><canvas id="chartTimeline"></canvas></div>
+      <h4 class="font-head" style="font-size:14px;margin:18px 0 10px;">تفصيل الدرجات حسب مقياس التقييم المعتمد للشعبة</h4>
+      ${criteriaBreakdownTable(s, r)}
+      <h4 class="font-head" style="font-size:14px;margin:20px 0 10px;">نسبة تحقق كل معيار</h4>
+      <div style="height:210px;"><canvas id="chartCriteria"></canvas></div>
 
       <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">التصنيف والإجراء الموصى به</h4>
       <div class="card" style="padding:14px;background:var(--surface-2);border:none;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">${badgeHTML(r.status,true)}<span class="table-sub">النتيجة المركّبة: ${r.score}%</span></div>
-        <div style="font-size:13px;color:var(--text);">${settings.actions[r.status]}</div>
+        <div style="font-size:13px;color:var(--text);">${escHtml(settings.actions[r.status])}</div>
       </div>
 
       <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">رأي عضو هيئة التدريس</h4>
-      <div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${s.evaluation.comment || 'لا توجد ملاحظات.'}</div>
+      <div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${escHtml(s.comment) || 'لا توجد ملاحظات.'}</div>
 
-      ${s.notes? `<h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">ملاحظات أكاديمية</h4><div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${s.notes}</div>`:''}
+      ${s.notes? `<h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">ملاحظات أكاديمية</h4><div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${escHtml(s.notes)}</div>`:''}
 
       <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">خطة التدخل الأكاديمي</h4>
-      ${s.interventions.length? s.interventions.map(iv=>`
+      ${(s.interventions||[]).length? s.interventions.map(iv=>`
         <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;margin-bottom:6px;"><b style="font-size:13px;">${iv.type}</b><span class="tag-pill">${iv.status}</span></div>
           <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:4px;">${iv.action}</div>
@@ -1155,10 +1354,16 @@ function openStudentDetail(id){
   document.getElementById('closeStudentModal').onclick=()=>ov.remove();
   document.getElementById('printStudent').onclick=()=>window.print();
   document.getElementById('editFromDetail').onclick=()=>{ ov.remove(); openStudentForm(s.id); };
-  new Chart(document.getElementById('chartTimeline'), {
-    type:'line',
-    data:{ labels:s.history.map(h=>h.label), datasets:[{ label:'المستوى العام', data:s.history.map(h=>h.value), borderColor: statusColor(r.status), backgroundColor: statusColor(r.status,.12), fill:true, tension:.35, pointRadius:3 }] },
-    options: baseChartOpts({y:{min:0,max:100}})
+  const cs = getComputedStyle(document.body);
+  const muted = cs.getPropertyValue('--text-muted').trim() || '#475569', border = cs.getPropertyValue('--border').trim() || '#CBD5E1';
+  const pcts = CRITERIA.map(cr=> Math.round(r.parts[cr.key].pct));
+  new Chart(document.getElementById('chartCriteria'), {
+    type:'bar',
+    data:{ labels:CRITERIA.map(cr=>cr.label), datasets:[{ data:pcts, borderRadius:6, maxBarThickness:22,
+      backgroundColor: pcts.map(v=> v>=settings.greenMin ? statusColor('green',.85) : v>=settings.yellowMin ? statusColor('yellow',.85) : statusColor('red',.85)) }] },
+    options: Object.assign(baseChartOpts(), { indexAxis:'y', scales:{
+      x:{ min:0, max:100, ticks:{color:muted, font:{size:10.5}, callback:v=>v+'%'}, grid:{color:border} },
+      y:{ ticks:{color:muted, font:{size:11}}, grid:{display:false} } } })
   });
 }
 function statusColor(status,alpha){
@@ -1167,29 +1372,25 @@ function statusColor(status,alpha){
   return alpha? `rgba(${rgb},${alpha})` : `rgb(${rgb})`;
 }
 
-/* ================================ STUDENT FORM (stepper) ================================ */
+/* ================================ STUDENT FORM ================================ */
 function openStudentForm(id){
   const editing = !!id;
   const inst = currentInstructor();
-  const s = editing? DB.data.students.find(x=>x.id===id) : {
+  const s = editing ? DB.data.students.find(x=>x.id===id) : {
     id:null, studentId:'', name:'', courseId: inst? inst.courseId: DB.data.courses[0]?.id||'', sectionId: inst? inst.sectionId: '',
-    attendance:{total:28,attended:28,absent:0}, activities:{activity:0,assignment:0,participation:0},
-    exercises:{avg:0,weak:0,pct:0}, midterm:{score:0,max:40}, evaluation:{score:0,participation:0,engagement:0,comment:''},
-    notes:'', interventions:[], history: buildFlatHistory()
+    scores:{attendance:0,activities:0,exercises:0,homework:0,midterm:0,evaluation:0}, comment:'', notes:'', interventions:[]
   };
-  const draft = JSON.parse(JSON.stringify(s));
-  let step = 1; const totalSteps=5;
-  const steps=['بيانات الطالب','الحضور','الأنشطة والتمارين','اختبار المنتصف','التقييم والمراجعة'];
+  const draft = cloneJSON(s);
+  ensureScores(draft);
+  if(!draft.sectionId){ const first = DB.data.sections.find(x=>x.courseId===draft.courseId); if(first) draft.sectionId = first.id; }
 
   const ov = document.createElement('div'); ov.className='overlay'; ov.id='studentFormModal';
   ov.innerHTML = `<div class="modal modal-lg">
     <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:16px;">${editing?'تعديل بيانات الطالب':'إضافة طالب جديد'}</h3><button class="icon-btn" id="closeForm">${ICON.x}</button></div>
     <div class="modal-body" id="formBody"></div>
     <div class="modal-foot">
-      <button class="btn btn-outline" id="prevStep">السابق</button>
-      <div style="flex:1;"></div>
       <button class="btn btn-outline" id="cancelForm">إلغاء</button>
-      <button class="btn btn-primary" id="nextStep">التالي</button>
+      <button class="btn btn-primary" id="saveStudent">${ICON.check} حفظ البيانات</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -1197,117 +1398,71 @@ function openStudentForm(id){
   document.getElementById('cancelForm').onclick=()=>ov.remove();
   ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
 
-  function stepperHTML(){
-    return `<div class="stepper-track">${steps.map((lbl,i)=>{
-      const n=i+1; const done=n<step, cur=n===step;
-      return `<div style="display:flex;flex-direction:column;align-items:center;">
-        <div class="step-dot ${done?'done':''} ${cur?'current':''}">${done? '✓' : n}</div>
-        <div class="step-label">${lbl}</div>
-      </div>${n<totalSteps?`<div class="step-line ${done?'done':''}"></div>`:''}`;
-    }).join('')}</div>`;
+  const val = id=>{ const e=document.getElementById(id); return e? e.value.trim() : ''; };
+  const num = id=>{ const e=document.getElementById(id); const n=e?parseFloat(e.value):NaN; return Number.isFinite(n)&&n>=0? n : 0; };
+
+  function readAll(){
+    draft.name = val('f_name'); draft.studentId = val('f_sid');
+    if(!inst){ const c=document.getElementById('f_course'); if(c) draft.courseId=c.value; const sc=document.getElementById('f_section'); if(sc) draft.sectionId=sc.value; }
+    CRITERIA.forEach(cr=>{ const e=document.getElementById('f_sc_'+cr.key); if(e) draft.scores[cr.key]=num('f_sc_'+cr.key); });
+    draft.comment = val('f_comment'); draft.notes = val('f_notes');
   }
-  function fieldsStep1(){
-    return `<div class="grid g-2">
-      <div class="field"><label>اسم الطالب</label><input type="text" id="f_name" value="${draft.name}" placeholder="الاسم الكامل"></div>
-      <div class="field"><label>الرقم الجامعي</label><input type="text" id="f_sid" value="${draft.studentId}" placeholder="مثال: 2044012"></div>
+  function updatePreview(){
+    readAll();
+    const r = classify({sectionId:draft.sectionId, scores:draft.scores});
+    CRITERIA.forEach(cr=>{ const el=document.getElementById('f_pv_'+cr.key); if(el) el.textContent = `المكتسب: ${fmtN(r.parts[cr.key].earned)} من ${fmtN(r.parts[cr.key].weight)}`; });
+    const box = document.getElementById('f_summary');
+    if(box) box.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">${badgeHTML(r.status,true)}<b>الدرجة الكلية: ${r.score}% (${fmtN(r.earned)} من ${fmtN(r.totalW)})</b></div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-top:8px;">${escHtml(DB.data.settings.actions[r.status])}</div>`;
+  }
+  function renderForm(){
+    const scheme = getScheme(draft.sectionId);
+    const secs = DB.data.sections.filter(x=>x.courseId===draft.courseId);
+    document.getElementById('formBody').innerHTML = `
+    <div class="grid g-2">
+      <div class="field"><label>اسم الطالب</label><input type="text" id="f_name" value="${escHtml(draft.name)}" placeholder="الاسم الكامل"></div>
+      <div class="field"><label>الرقم الجامعي</label><input type="text" id="f_sid" value="${escHtml(draft.studentId)}" placeholder="مثال: 2044012"></div>
       <div class="field"><label>المقرر</label>
         <select id="f_course" ${inst?'disabled':''}>${DB.data.courses.map(c=>`<option value="${c.id}" ${draft.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select>
       </div>
       <div class="field"><label>الشعبة</label>
-        <select id="f_section" ${inst?'disabled':''}>${DB.data.sections.filter(x=>x.courseId===draft.courseId).map(sec=>`<option value="${sec.id}" ${draft.sectionId===sec.id?'selected':''}>شعبة ${sec.number} — ${instructorOf(sec.instructorId)?.name||''}</option>`).join('')}</select>
+        <select id="f_section" ${inst?'disabled':''}>${secs.map(sec=>`<option value="${sec.id}" ${draft.sectionId===sec.id?'selected':''}>شعبة ${sec.number} — ${instructorOf(sec.instructorId)?.name||''}</option>`).join('')}</select>
       </div>
-    </div>`;
-  }
-  function fieldsStep2(){
-    return `<div class="grid g-3">
-      <div class="field"><label>إجمالي عدد المحاضرات</label><input type="number" id="f_total" value="${draft.attendance.total}" min="1"></div>
-      <div class="field"><label>عدد المحاضرات الحاضرة</label><input type="number" id="f_attended" value="${draft.attendance.attended}" min="0"></div>
-      <div class="field"><label>نسبة الغياب</label><input type="text" disabled id="f_absPct" value="${calcAbsPct(draft)}%"></div>
     </div>
-    <div class="progress" style="margin-top:4px;"><div id="f_attBar" style="width:${100-calcAbsPct(draft)}%;background:var(--primary-600);"></div></div>`;
-  }
-  function fieldsStep3(){
-    return `<h4 class="font-head" style="font-size:13.5px;margin:0 0 10px;">الأداء والأنشطة</h4>
+    <h4 class="font-head" style="font-size:13.5px;margin:6px 0 4px;">الدرجات الخام</h4>
+    <p class="table-sub" style="margin:0 0 10px;">تُحوَّل تلقائيًا إلى درجات مكتسبة وفق مقياس التقييم المعتمد لهذه الشعبة.</p>
     <div class="grid g-3">
-      <div class="field"><label>درجة الأنشطة (%)</label><input type="number" id="f_activity" value="${draft.activities.activity}" min="0" max="100"></div>
-      <div class="field"><label>درجة الواجبات (%)</label><input type="number" id="f_assignment" value="${draft.activities.assignment}" min="0" max="100"></div>
-      <div class="field"><label>درجة المشاركة (%)</label><input type="number" id="f_participation" value="${draft.activities.participation}" min="0" max="100"></div>
+      ${CRITERIA.map(cr=>`<div class="field"><label>${cr.raw} (من ${fmtN(scheme.criteria[cr.key].max)})</label>
+        <input type="number" min="0" step="0.5" id="f_sc_${cr.key}" value="${draft.scores[cr.key]}">
+        <div class="table-sub" id="f_pv_${cr.key}" style="margin-top:4px;"></div></div>`).join('')}
     </div>
-    <h4 class="font-head" style="font-size:13.5px;margin:16px 0 10px;">التمارين</h4>
-    <div class="grid g-3">
-      <div class="field"><label>متوسط التمارين (%)</label><input type="number" id="f_exAvg" value="${draft.exercises.avg}" min="0" max="100"></div>
-      <div class="field"><label>عدد التمارين الضعيفة</label><input type="number" id="f_exWeak" value="${draft.exercises.weak}" min="0"></div>
-      <div class="field"><label>نسبة الأداء الكلي (%)</label><input type="number" id="f_exPct" value="${draft.exercises.pct}" min="0" max="100"></div>
-    </div>`;
-  }
-  function fieldsStep4(){
-    return `<div class="grid g-3">
-      <div class="field"><label>درجة اختبار المنتصف</label><input type="number" id="f_midScore" value="${draft.midterm.score}" min="0"></div>
-      <div class="field"><label>الدرجة العظمى</label><input type="number" id="f_midMax" value="${draft.midterm.max}" min="1"></div>
-      <div class="field"><label>النسبة المئوية</label><input type="text" disabled value="${draft.midterm.max? Math.round(draft.midterm.score/draft.midterm.max*100):0}%"></div>
-    </div>`;
-  }
-  function fieldsStep5(){
-    const tmp = JSON.parse(JSON.stringify(draft));
-    const r = classify(tmp);
-    return `<div class="grid g-3" style="margin-bottom:14px;">
-      <div class="field"><label>تقييم عام (%)</label><input type="number" id="f_evalScore" value="${draft.evaluation.score}" min="0" max="100"></div>
-      <div class="field"><label>المشاركة الصفية (%)</label><input type="number" id="f_evalPart" value="${draft.evaluation.participation}" min="0" max="100"></div>
-      <div class="field"><label>الانخراط الأكاديمي (%)</label><input type="number" id="f_evalEng" value="${draft.evaluation.engagement}" min="0" max="100"></div>
-    </div>
-    <div class="field"><label>ملاحظة عامة من عضو هيئة التدريس</label><textarea id="f_comment" placeholder="اكتب ملاحظتك هنا...">${draft.evaluation.comment}</textarea></div>
-    <div class="field"><label>ملاحظات أكاديمية إضافية</label><textarea id="f_notes" placeholder="اختياري">${draft.notes||''}</textarea></div>
+    <div class="field"><label>ملاحظة عامة من عضو هيئة التدريس</label><textarea id="f_comment" placeholder="اكتب ملاحظتك هنا...">${escHtml(draft.comment)}</textarea></div>
+    <div class="field"><label>ملاحظات أكاديمية إضافية</label><textarea id="f_notes" placeholder="اختياري">${escHtml(draft.notes||'')}</textarea></div>
     <div class="divider"></div>
-    <h4 class="font-head" style="font-size:14px;margin:0 0 10px;">المراجعة والتصنيف التلقائي</h4>
-    <div class="card" style="padding:14px;background:var(--surface-2);border:none;">
-      <div style="display:flex;align-items:center;justify-content:space-between;">${badgeHTML(r.status,true)}<b>النتيجة: ${r.score}%</b></div>
-      <div style="font-size:12.5px;color:var(--text-muted);margin-top:8px;">${DB.data.settings.actions[r.status]}</div>
-    </div>`;
-  }
-  function calcAbsPct(d){ return d.attendance.total? Math.round((1-d.attendance.attended/d.attendance.total)*100):0; }
-  function readStep(n){
-    if(n===1){ draft.name=val('f_name'); draft.studentId=val('f_sid');
-      if(!inst){ draft.courseId=val('f_course'); const secSel=document.getElementById('f_section'); draft.sectionId = secSel? secSel.value : draft.sectionId; }
+    <h4 class="font-head" style="font-size:14px;margin:0 0 10px;">النتيجة والتصنيف التلقائي</h4>
+    <div class="card" style="padding:14px;background:var(--surface-2);border:none;" id="f_summary"></div>`;
+    CRITERIA.forEach(cr=>{ document.getElementById('f_sc_'+cr.key).oninput = updatePreview; });
+    if(!inst){
+      document.getElementById('f_course').onchange=()=>{ readAll(); const first=DB.data.sections.find(x=>x.courseId===draft.courseId); draft.sectionId = first? first.id : ''; renderForm(); };
+      document.getElementById('f_section').onchange=()=>{ readAll(); renderForm(); };
     }
-    if(n===2){ draft.attendance.total = num('f_total',1); draft.attendance.attended = Math.min(num('f_attended',0), draft.attendance.total); draft.attendance.absent = draft.attendance.total-draft.attendance.attended; }
-    if(n===3){ draft.activities.activity=num('f_activity',0); draft.activities.assignment=num('f_assignment',0); draft.activities.participation=num('f_participation',0);
-      draft.exercises.avg=num('f_exAvg',0); draft.exercises.weak=num('f_exWeak',0); draft.exercises.pct=num('f_exPct',0); }
-    if(n===4){ draft.midterm.score=num('f_midScore',0); draft.midterm.max=num('f_midMax',1); }
-    if(n===5){ draft.evaluation.score=num('f_evalScore',0); draft.evaluation.participation=num('f_evalPart',0); draft.evaluation.engagement=num('f_evalEng',0);
-      draft.evaluation.comment=val('f_comment'); draft.notes=val('f_notes'); }
+    updatePreview();
   }
-  function val(id){ const e=document.getElementById(id); return e? e.value.trim(): ''; }
-  function num(id,def){ const e=document.getElementById(id); const n=e?parseFloat(e.value):NaN; return isNaN(n)?def:n; }
 
-  function renderStep(){
-    const body = document.getElementById('formBody');
-    body.innerHTML = stepperHTML() + [fieldsStep1,fieldsStep2,fieldsStep3,fieldsStep4,fieldsStep5][step-1]();
-    document.getElementById('prevStep').style.visibility = step===1?'hidden':'visible';
-    document.getElementById('nextStep').innerHTML = step===totalSteps? (ICON.check+' حفظ البيانات') : 'التالي';
-    if(step===1 && !inst){
-      document.getElementById('f_course').onchange=()=>{ draft.courseId=val('f_course'); draft.sectionId=''; renderStep(); };
+  document.getElementById('saveStudent').onclick=()=>{
+    readAll();
+    if(!draft.name || !draft.studentId){ toast('يرجى تعبئة اسم الطالب والرقم الجامعي','error'); return; }
+    if(!draft.sectionId){ toast('يرجى اختيار الشعبة','error'); return; }
+    if(DB.data.students.some(x=>x.id!==draft.id && x.sectionId===draft.sectionId && String(x.studentId)===draft.studentId)){
+      toast('هذا الرقم الجامعي مسجّل مسبقًا في الشعبة نفسها','error'); return;
     }
-    if(step===2){
-      ['f_total','f_attended'].forEach(id=> document.getElementById(id).oninput=()=>{
-        const t=num('f_total',1), a=Math.min(num('f_attended',0),t);
-        document.getElementById('f_absPct').value = (t? Math.round((1-a/t)*100):0)+'%';
-        document.getElementById('f_attBar').style.width = (t? Math.round(a/t*100):0)+'%';
-      });
-    }
-  }
-  document.getElementById('nextStep').onclick=()=>{
-    readStep(step);
-    if(step===1){
-      if(!draft.name || !draft.studentId){ toast('يرجى تعبئة اسم الطالب والرقم الجامعي','error'); return; }
-      if(!inst && !draft.sectionId){ toast('يرجى اختيار الشعبة','error'); return; }
-    }
-    if(step<totalSteps){ step++; renderStep(); return; }
-    const btn=document.getElementById('nextStep'); btn.classList.add('btn-loading'); btn.disabled=true;
+    const btn=document.getElementById('saveStudent'); btn.classList.add('btn-loading'); btn.disabled=true;
     setTimeout(()=>{
       if(editing){
         Object.assign(s, draft);
       } else {
         draft.id = uid('stu'); draft.createdAt = daysAgoISO(0); draft.interventions=[];
+        draft.level = 'السنة الأولى المشتركة';
         DB.data.students.push(draft);
       }
       DB.save();
@@ -1316,12 +1471,10 @@ function openStudentForm(id){
       ov.remove();
       renderRoute();
       toast(editing? 'تم تحديث بيانات الطالب بنجاح':'تمت إضافة الطالب بنجاح');
-    }, 500);
+    }, 400);
   };
-  document.getElementById('prevStep').onclick=()=>{ if(step>1){ readStep(step); step--; renderStep(); } };
-  renderStep();
+  renderForm();
 }
-function buildFlatHistory(){ return Array.from({length:6},(_,i)=>({label:'أسبوع '+(i+1), value:0})); }
 
 /* ================================ COURSE COMPARISON ================================ */
 function comparisonView(){
@@ -1356,7 +1509,7 @@ function reportsView(){
   }
   const f = S.reportFilters;
   return `
-  <div class="card" style="padding:18px;margin-bottom:16px;">
+  <div class="card no-print" style="padding:18px;margin-bottom:16px;">
     <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">إعداد تقرير مخصص</h3>
     <div class="grid g-4">
       <div class="field"><label>المقرر</label><select id="rf_course"><option value="all">جميع المقررات</option>${DB.data.courses.map(c=>`<option value="${c.id}" ${f.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
@@ -1369,45 +1522,93 @@ function reportsView(){
   </div>
   <div id="reportOutput"></div>`;
 }
-function sectionReportBody(sectionId){
-  const sec = sectionOf(sectionId), c = courseOf(sec?.courseId), inst = instructorOf(sec?.instructorId);
+function schemeTableHTML(scheme){
+  const totalW = CRITERIA.reduce((a,cr)=>a+n0(scheme.criteria[cr.key].weight),0);
+  return `<div class="scrollx"><table class="scheme-table"><thead><tr><th>المعيار</th><th>الوزن من النسبة الكلية</th><th>الحد الأعظم للدرجة الخام</th><th>الآلية المختارة</th><th>طريقة حساب الدرجة</th></tr></thead><tbody>
+    ${CRITERIA.map(cr=>{
+      const c = scheme.criteria[cr.key], d = describeCriterion(c);
+      return `<tr><td><b>${cr.label}</b></td><td>${fmtN(c.weight)}%</td><td>${fmtN(c.max)} ${cr.unit}</td><td><span class="tag-pill">${d.name}</span></td><td style="font-size:12.5px;line-height:1.9;">${d.html}</td></tr>`;
+    }).join('')}
+    <tr style="background:var(--surface-2);"><td><b>المجموع</b></td><td><b>${fmtN(totalW)}%</b></td><td colspan="3" class="table-sub">${Math.abs(totalW-100)<0.01 ? 'مجموع الأوزان 100%.' : 'مجموع الأوزان لا يساوي 100%؛ تُحسب النسبة الكلية من المجموع الفعلي للأوزان.'}</td></tr>
+  </tbody></table></div>`;
+}
+function schemeMetaLine(scheme){
+  if(!scheme.updatedAt) return '<span class="table-sub">المقياس الافتراضي للنظام (لم يعدّله المدرس بعد)</span>';
+  return `<span class="table-sub">آخر تعديل للمقياس: ${fmtDateTime(scheme.updatedAt)}${scheme.updatedBy?' — '+escHtml(scheme.updatedBy):''}</span>`;
+}
+function thresholdsLine(){
+  const st = DB.data.settings;
+  return `حدود التصنيف: أخضر ≥ ${st.greenMin}% — أصفر ≥ ${st.yellowMin}% — أحمر أقل من ذلك — رمادي عند نسبة حضور ≤ ${st.grayAttendanceMax}%.`;
+}
+function sectionReportBody(sectionId, uniq){
+  const sec = sectionOf(sectionId);
+  if(!sec) return `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعبة لعرض التقرير.</div></div></div>`;
+  const c = courseOf(sec.courseId), inst = instructorOf(sec.instructorId);
   const students = studentsFor(c?c.id:'', sectionId);
+  const scheme = getScheme(sectionId);
   const stats = computeStats(students);
-  return `<div class="card" id="reportPrintArea" style="padding:24px;">
+  const rs = students.map(s=>({s, r:classify(s)}));
+  const avgPct = key => rs.length ? Math.round(rs.reduce((a,x)=>a+x.r.parts[key].pct,0)/rs.length) : 0;
+  const avgScore = rs.length ? Math.round(rs.reduce((a,x)=>a+x.r.score,0)/rs.length) : 0;
+  return `<div class="card report-block" id="reportPrintArea${uniq!==undefined?'_'+uniq:''}" style="padding:24px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
       <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — تقرير أداء أكاديمي (${c?c.name:''})</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
       <div style="text-align:left;font-size:11.5px;color:var(--text-muted);">تاريخ الإصدار<br><b>${daysAgoISO(0)}</b></div>
     </div>
     <div class="grid g-4" style="margin-bottom:16px;">
-      ${infoBlock('الشعبة', sec?sec.number:'')} ${infoBlock('المدرس', inst?inst.name:'')} ${infoBlock('الفصل الدراسي', (sec?sec.semester:'الأول')+' — '+(sec?sec.year:'1447هـ'))} ${infoBlock('عدد الطلبة', students.length)}
+      ${infoBlock('الشعبة', sec.number)} ${infoBlock('المدرس', inst?inst.name:'')} ${infoBlock('الفصل الدراسي', sec.semester+' — '+sec.year)} ${infoBlock('عدد الطلبة', students.length)}
     </div>
     <div class="grid g-4" style="margin-bottom:16px;">
-      ${miniStat('متوسط الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر', stats.green)} ${miniStat('أصفر', stats.yellow)} ${miniStat('أحمر / رمادي', stats.red+' / '+stats.gray)}
+      ${miniStat('متوسط الدرجة الكلية', avgScore+'%')} ${miniStat('متوسط الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر / أصفر', stats.green+' / '+stats.yellow)} ${miniStat('أحمر / رمادي', stats.red+' / '+stats.gray)}
     </div>
-    <h4 class="font-head" style="font-size:14px;margin:16px 0 8px;">قائمة الطلبة</h4>
-    <div class="scrollx"><table><thead><tr><th>الرقم الجامعي</th><th>الاسم</th><th>الحضور</th><th>الأنشطة</th><th>التمارين</th><th>المنتصف</th><th>الحالة</th></tr></thead><tbody>
-      ${students.map(s=>{ const r=classify(s); const actAvg=Math.round((s.activities.activity+s.activities.assignment+s.activities.participation)/3);
-        return `<tr><td>${s.studentId}</td><td>${s.name}</td><td>${r.attRate}\%</td><td>${actAvg}%</td><td>${s.exercises.pct}\%</td><td>${s.midterm.score}/${s.midterm.max}</td><td>${badgeHTML(r.status)}</td></tr>`; }).join('')}
+
+    <h4 class="font-head" style="font-size:14px;margin:18px 0 4px;">مقياس التقييم المعتمد من مدرس المقرر</h4>
+    <div style="margin-bottom:8px;">${schemeMetaLine(scheme)}</div>
+    ${schemeTableHTML(scheme)}
+    <div class="table-sub" style="margin-top:8px;">${thresholdsLine()}</div>
+
+    <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">متوسط تحقق كل معيار في الشعبة</h4>
+    <div class="grid g-3" style="margin-bottom:6px;">
+      ${CRITERIA.map(cr=>{ const d=describeCriterion(scheme.criteria[cr.key]); return miniStat(`${cr.label} — ${d.name}`, avgPct(cr.key)+'%'); }).join('')}
+    </div>
+
+    <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">قائمة الطلبة (الدرجة المكتسبة من وزن كل معيار)</h4>
+    <div class="scrollx"><table><thead><tr><th>الرقم الجامعي</th><th>الاسم</th>
+      ${CRITERIA.map(cr=>`<th>${cr.label}<div class="table-sub">من ${fmtN(scheme.criteria[cr.key].weight)}</div></th>`).join('')}
+      <th>المجموع</th><th>الحالة</th></tr></thead><tbody>
+      ${rs.length? rs.map(({s,r})=>`<tr><td>${escHtml(s.studentId)}</td><td>${escHtml(s.name)}</td>
+        ${CRITERIA.map(cr=>`<td>${fmtN(r.parts[cr.key].earned)}</td>`).join('')}
+        <td><b>${r.score}%</b></td><td>${badgeHTML(r.status)}</td></tr>`).join('')
+        : `<tr><td colspan="${CRITERIA.length+4}"><div class="empty" style="padding:24px;">لا يوجد طلبة في هذه الشعبة بعد.</div></td></tr>`}
     </tbody></table></div>
     <div style="display:flex;gap:8px;margin-top:18px;" class="no-print">
       <button class="btn btn-outline" onclick="window.print()">${ICON.print} طباعة</button>
-      <button class="btn btn-outline" id="csvBtn">${ICON.download} تصدير Excel (CSV)</button>
+      <button class="btn btn-outline" data-export-section="${sectionId}">${ICON.download} تصدير Excel</button>
     </div>
   </div>`;
 }
 function fullCoursesReport(){
   const rows = DB.data.courses.map(c=>({c, stats: computeStats(studentsFor(c.id))}));
   const grand = computeStats(DB.data.students);
-  return `<div class="card" id="reportPrintArea" style="padding:24px;">
+  return `<div class="card report-block" id="reportPrintArea" style="padding:24px;">
     <div style="border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
       <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — التقرير الشامل للمقررات</h2>
       <div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية — ${daysAgoISO(0)}</div>
     </div>
-    ${rows.map(({c,stats})=>`
+    ${rows.map(({c,stats})=>{
+      const secs = DB.data.sections.filter(s=>s.courseId===c.id);
+      return `
       <h4 class="font-head" style="font-size:14.5px;margin:16px 0 8px;">${c.name} (${c.code})</h4>
       <div class="grid g-4" style="margin-bottom:14px;">
         ${miniStat('الطلبة', stats.total)} ${miniStat('الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر/أصفر', stats.green+'/'+stats.yellow)} ${miniStat('أحمر/رمادي', stats.red+'/'+stats.gray)}
-      </div>`).join('')}
+      </div>
+      ${secs.map(sec=>{ const ins=instructorOf(sec.instructorId); const sc=getScheme(sec.id);
+        return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>شعبة ${sec.number}${ins?' — '+ins.name:''}</b>${schemeMetaLine(sc)}</div>
+          ${schemeTableHTML(sc)}
+        </div>`; }).join('')}`;
+    }).join('')}
+    <div class="table-sub" style="margin:4px 0 12px;">${thresholdsLine()}</div>
     <div class="divider"></div>
     <h4 class="font-head" style="font-size:15px;margin:0 0 10px;">الملخص الأكاديمي العام</h4>
     <div class="grid g-4" style="margin-bottom:16px;">
@@ -1468,12 +1669,9 @@ function settingsView(){
       </div>
     </div>
     <div class="card" style="padding:18px;">
-      <h3 class="font-head" style="margin:0 0 4px;font-size:15px;">أوزان محاور التقييم</h3>
-      <p class="table-sub" style="margin:0 0 16px;">يجب أن يكون مجموع الأوزان 100%.</p>
-      ${['attendance:الحضور','activities:الأنشطة','exercises:التمارين','midterm:اختبار المنتصف','evaluation:تقييم المدرس'].map(pair=>{
-        const [k,l]=pair.split(':');
-        return `<div class="field"><label>${l} (%)</label><input type="number" id="w_${k}" value="${Math.round(st.weights[k]*100)}"></div>`;
-      }).join('')}
+      <h3 class="font-head" style="margin:0 0 4px;font-size:15px;">أوزان المعايير وآليات الحساب</h3>
+      <p class="table-sub" style="margin:0 0 16px;line-height:1.9;">لم تعد الأوزان إعدادًا عامًا؛ أصبح مدرس كل مادة يضبط وزن كل معيار (الحضور، الأنشطة، التمارين، الواجب الورقي، المنتصف، تقييم المدرس) وآلية حسابه لشعبته من صفحة «معايير التقييم».</p>
+      <button class="btn btn-primary" data-nav="scheme">${ICON.target} فتح صفحة معايير التقييم</button>
     </div>
   </div>
   <div class="card" style="padding:18px;margin-top:14px;">
@@ -1615,6 +1813,8 @@ function openUserForm(id){
 
 /* ================================ Page-level event wiring ================================ */
 function wirePageEvents(){
+  document.querySelectorAll('#content [data-nav]').forEach(el=> el.onclick = ()=> go(el.getAttribute('data-nav')));
+  wireSchemePage();
   document.querySelectorAll('[data-student]').forEach(el=> el.onclick = ()=> openStudentDetail(el.getAttribute('data-student')));
   document.querySelectorAll('[data-view-student]').forEach(el=> el.onclick=(e)=>{e.stopPropagation(); openStudentDetail(el.getAttribute('data-view-student'));});
   document.querySelectorAll('[data-edit-student]').forEach(el=> el.onclick=(e)=>{e.stopPropagation(); openStudentForm(el.getAttribute('data-edit-student'));});
@@ -1632,16 +1832,15 @@ function wirePageEvents(){
   const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=(e)=>{ e.preventDefault(); exportStudentsExcel(scopedStudents()); };
   const deleteAllBtn = document.getElementById('deleteAllStudentsBtn');
   if(deleteAllBtn) deleteAllBtn.onclick=()=>{
+    const inst = currentInstructor();
     confirmDialog({
-      title:'حذف جميع الطلاب',
-      message:'هل أنت متأكد من حذف كافة الطلاب المسجلين؟ لا يمكن التراجع عن هذا الإجراء.',
-      confirmText:'حذف الكل',
-      danger:true,
+      title: inst ? 'حذف جميع طلبة الشعبة' : 'حذف جميع الطلاب',
+      message: inst ? 'هل أنت متأكد من حذف جميع طلبة شعبتك؟ لا يمكن التراجع عن هذا الإجراء.' : 'هل أنت متأكد من حذف كافة الطلاب المسجلين؟ لا يمكن التراجع عن هذا الإجراء.',
+      confirmText:'حذف الكل', danger:true,
       onConfirm:()=>{
-        DB.data.students = [];
-        DB.save();
-        renderRoute();
-        toast('تم حذف جميع الطلاب بنجاح', 'warn');
+        DB.data.students = inst ? DB.data.students.filter(s=>s.sectionId!==inst.sectionId) : [];
+        trackUpdate('حذف جميع الطلبة','');
+        DB.save(); renderRoute(); toast('تم حذف الطلاب بنجاح', 'warn');
       }
     });
   };
@@ -1649,22 +1848,10 @@ function wirePageEvents(){
   const importBtn = document.getElementById('importExcelBtn');
   const fileInput = document.getElementById('excelFileInput');
   if(importBtn && fileInput){
-    importBtn.onclick = (e)=>{
-      e.preventDefault();
-      confirmDialog({
-        title:'استيراد وإعادة تهيئة شاملة',
-        message:'سيؤدي استيراد ملف جديد إلى إعادة تهيئة بيانات النظام بالكامل (الطلبة، المقررات، الشعب، وأسماء المدرسين) بناءً على الملف المُستورد. هل تريد المتابعة؟',
-        confirmText:'تأكيد وإعادة التهيئة',
-        danger:true,
-        onConfirm:()=> fileInput.click()
-      });
-    };
-    fileInput.onchange = (e)=>{
-      const file = e.target.files[0];
-      if(file) handleExcelImport(file);
-      fileInput.value = '';
-    };
+    importBtn.onclick = (e)=>{ e.preventDefault(); fileInput.click(); };
+    fileInput.onchange = (e)=>{ const file = e.target.files[0]; if(file) startExcelImport(file); fileInput.value = ''; };
   }
+  const tplBtn = document.getElementById('downloadTemplateBtn'); if(tplBtn) tplBtn.onclick=(e)=>{ e.preventDefault(); downloadStudentsTemplate(); };
 
   const stuSearch=document.getElementById('stuSearch'); if(stuSearch) stuSearch.oninput=()=>{ S.studentFilters.q=stuSearch.value; S.studentPage=1; renderRoute(); };
   const fs=document.getElementById('filterStatus'); if(fs) fs.onchange=()=>{ S.studentFilters.status=fs.value; S.studentPage=1; renderRoute(); };
@@ -1701,26 +1888,28 @@ function wirePageEvents(){
     const courseId=document.getElementById('rf_course').value, sectionId=document.getElementById('rf_section').value;
     let target;
     if(sectionId!=='all') target = sectionReportBody(sectionId);
-    else if(courseId!=='all'){ const sec = DB.data.sections.find(s=>s.courseId===courseId); target = sectionReportBody(sec?sec.id:''); }
+    else if(courseId!=='all'){
+      const secs = DB.data.sections.filter(s=>s.courseId===courseId);
+      target = secs.length ? secs.map((s,i)=>sectionReportBody(s.id,i)).join('<div style="height:16px;"></div>') : `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعب لهذا المقرر.</div></div></div>`;
+    }
     else target = fullCoursesReport();
     document.getElementById('reportOutput').innerHTML = target;
     afterRouteRender();
-    const csv=document.getElementById('csvBtn'); if(csv) csv.onclick=()=>exportCSV(scopedStudents());
     toast('تم إنشاء التقرير');
   };
   const fullBtn=document.getElementById('fullReportBtn'); if(fullBtn) fullBtn.onclick=()=>{
     document.getElementById('reportOutput').innerHTML = fullCoursesReport(); afterRouteRender(); toast('تم إنشاء التقرير الشامل');
   };
-  const csvBtn0=document.getElementById('csvBtn'); if(csvBtn0) csvBtn0.onclick=()=>exportCSV(scopedStudents());
+  document.querySelectorAll('[data-export-section]').forEach(el=> el.onclick=()=>{
+    const sid = el.getAttribute('data-export-section');
+    exportStudentsExcel(DB.data.students.filter(s=>s.sectionId===sid));
+  });
 
   const saveSettings=document.getElementById('saveSettingsBtn'); if(saveSettings) saveSettings.onclick=()=>{
     const st = DB.data.settings;
     st.greenMin = parseFloat(document.getElementById('st_green').value)||st.greenMin;
     st.yellowMin = parseFloat(document.getElementById('st_yellow').value)||st.yellowMin;
     st.grayAttendanceMax = parseFloat(document.getElementById('st_gray').value);
-    ['attendance','activities','exercises','midterm','evaluation'].forEach(k=>{
-      const v = parseFloat(document.getElementById('w_'+k).value); if(!isNaN(v)) st.weights[k]=v/100;
-    });
     ['green','yellow','red','gray'].forEach(k=> st.actions[k]=document.getElementById('act_'+k).value);
     DB.save(); toast('تم حفظ الإعدادات بنجاح');
   };
@@ -1789,183 +1978,438 @@ function parseScoreValue(v, fallback=0){
   return parseFloat(m[1]);
 }
 
+/* ================================ SCHEME EDITOR (معايير التقييم) ================================ */
+function schemeSections(){
+  const inst = currentInstructor();
+  return inst ? DB.data.sections.filter(s=>s.id===inst.sectionId) : DB.data.sections;
+}
+function schemeDraftEnsure(){
+  const list = schemeSections();
+  let id = S.schemeDraft && S.schemeDraft.sectionId;
+  if(!id || !list.find(s=>s.id===id)) id = list[0] ? list[0].id : '';
+  if(!S.schemeDraft || S.schemeDraft.sectionId !== id){
+    S.schemeDraft = { sectionId:id, scheme: cloneJSON(getScheme(id)), preview:{}, dirty:false };
+  }
+  return S.schemeDraft;
+}
+function weightSumBadge(sum){
+  const ok = Math.abs(sum-100) < 0.01;
+  return `<span class="badge ${ok?'b-green':'b-amber'}"><span class="dot"></span>${fmtN(sum)} / 100${ok?'':' — تُحسب النسبة الكلية من المجموع الفعلي'}</span>`;
+}
+function methodParamsHTML(cr, c){
+  const k = cr.key;
+  if(c.method==='cap') return `<div class="field" style="max-width:300px;"><label>حدّ الإتقان (% من الحد الأعظم)</label><input type="number" min="1" max="100" step="1" data-sc="capPct" data-k="${k}" value="${c.capPct}"><div class="table-sub" style="margin-top:4px;">يحصل الطالب على الوزن كاملًا عند بلوغ هذه النسبة.</div></div>`;
+  if(c.method==='deduct') return `<div class="field" style="max-width:300px;"><label>الخصم لكل وحدة نقص (من الوزن)</label><input type="number" min="0" step="0.05" data-sc="perUnit" data-k="${k}" value="${c.perUnit}"><div class="table-sub" style="margin-top:4px;">يُخصم هذا المقدار عن كل ${cr.unit} ناقصة عن الحد الأعظم.</div></div>`;
+  if(c.method==='bands'){
+    const bands = Array.isArray(c.bands) ? c.bands : [];
+    return `<div class="field"><label>الشرائح (تُطبَّق أعلى شريحة تحققت)</label>
+      ${bands.map((b,i)=>`<div class="band-row"><span>إذا كانت النسبة ≥</span><input type="number" min="0" max="100" step="1" data-band="min" data-k="${k}" data-i="${i}" value="${b.min}"><span>% من الحد الأعظم ← يحصل على</span><input type="number" min="0" max="100" step="1" data-band="pct" data-k="${k}" data-i="${i}" value="${b.pct}"><span>% من الوزن</span><button type="button" class="iconbtn-sm" title="حذف الشريحة" data-band-del data-k="${k}" data-i="${i}">${ICON.trash}</button></div>`).join('')}
+      <button type="button" class="btn btn-outline btn-sm" data-band-add data-k="${k}">${ICON.plus} إضافة شريحة</button></div>`;
+  }
+  if(c.method==='custom') return `<div class="field"><label>المعادلة (الناتج هو الدرجة المكتسبة من الوزن)</label>
+    <input type="text" class="mono" data-sc="formula" data-k="${k}" value="${escHtml(c.formula)}" spellcheck="false" autocomplete="off">
+    <div class="table-sub" style="margin-top:4px;line-height:1.9;">المتغيرات: <b class="mono">x</b> الدرجة الخام، <b class="mono">m</b> الحد الأعظم، <b class="mono">w</b> الوزن، <b class="mono">p</b> = x ÷ m. الدوال: <span class="mono">min max sqrt abs round floor ceil pow if(شرط, أ, ب)</span>.<br>أمثلة: <span class="mono">w * p</span> — <span class="mono">w * sqrt(p)</span> — <span class="mono">if(p &gt;= 0.9, w, w * p * 0.8)</span>. يُقيَّد الناتج بين صفر والوزن.</div>
+    <div class="crit-err" id="sc_err_${k}"></div></div>`;
+  return '';
+}
+function criterionCard(cr, d){
+  const c = d.scheme.criteria[cr.key];
+  const mOpts = Object.entries(METHODS).map(([k,v])=>`<option value="${k}" ${c.method===k?'selected':''}>${v.label}</option>`).join('');
+  const pv = (d.preview[cr.key] !== undefined && Number.isFinite(d.preview[cr.key])) ? d.preview[cr.key] : Math.round(n0(c.max)*0.8*2)/2;
+  return `<div class="card crit-card" data-crit="${cr.key}">
+    <div class="crit-head"><div><h3 class="font-head" style="margin:0;font-size:15px;">${cr.label}</h3><div class="table-sub">عمود ملف Excel: ${cr.raw}</div></div><span class="tag-pill" id="sc_tag_${cr.key}"></span></div>
+    <div class="grid g-3" style="margin-top:12px;">
+      <div class="field"><label>الوزن من النسبة الكلية</label><input type="number" min="0" step="0.5" data-sc="weight" data-k="${cr.key}" value="${c.weight}"></div>
+      <div class="field"><label>${cr.maxLabel}</label><input type="number" min="0" step="0.5" data-sc="max" data-k="${cr.key}" value="${c.max}"></div>
+      <div class="field"><label>آلية الحساب</label><select data-sc-method data-k="${cr.key}">${mOpts}</select></div>
+    </div>
+    ${methodParamsHTML(cr, c)}
+    <div class="crit-desc" id="sc_desc_${cr.key}"></div>
+    <div class="crit-preview">
+      <span class="table-sub" style="font-weight:700;">جرّب قيمة خام:</span>
+      <input type="number" min="0" step="0.5" data-pv="${cr.key}" value="${pv}">
+      <span>←</span><b id="sc_pvout_${cr.key}"></b>
+    </div>
+  </div>`;
+}
+function schemeView(){
+  const list = schemeSections();
+  if(!list.length) return `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعب لضبط معايير التقييم لها. أضف شعبة أولًا.</div></div></div>`;
+  const d = schemeDraftEnsure();
+  const sec = sectionOf(d.sectionId), crs = courseOf(sec.courseId), ins = instructorOf(sec.instructorId);
+  const inst = currentInstructor();
+  const others = DB.data.sections.filter(s=>s.courseId===sec.courseId && s.id!==sec.id).length;
+  const selector = inst ? '' : `<div class="field" style="margin:0;min-width:260px;"><label>الشعبة</label><select id="sc_section">${list.map(s=>`<option value="${s.id}" ${s.id===d.sectionId?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select></div>`;
+  const sum = CRITERIA.reduce((a,cr)=>a+n0(d.scheme.criteria[cr.key].weight),0);
+  return `
+  <div class="card" style="padding:16px 18px;margin-bottom:14px;">
+    <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
+      ${selector}
+      ${infoBlock('المقرر', crs?crs.name:'')} ${infoBlock('الشعبة', sec.number)} ${infoBlock('مدرس المادة', ins?ins.name:'')}
+      <div style="margin-inline-start:auto;"><div class="table-sub" style="font-weight:700;margin-bottom:4px;">مجموع الأوزان</div><div id="sc_wsum">${weightSumBadge(sum)}</div></div>
+    </div>
+    <div style="margin-top:10px;">${schemeMetaLine(getScheme(d.sectionId))}</div>
+  </div>
+  <div class="card" style="padding:12px 16px;margin-bottom:14px;font-size:12.5px;color:var(--text-muted);display:flex;gap:8px;align-items:flex-start;line-height:1.8;">${ICON.info}<div>لكل معيار وزن (من النسبة الكلية) وحدّ أعظم للدرجة الخام وآلية حساب يختارها المدرس. تُطبَّق التغييرات على جميع طلبة الشعبة فور الحفظ، وتظهر الآلية المختارة لكل معيار في تقرير الشعبة وفي ملف الطالب.</div></div>
+  <div style="display:grid;gap:14px;">${CRITERIA.map(cr=>criterionCard(cr,d)).join('')}</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
+    <button class="btn btn-primary" id="sc_save">${ICON.check} حفظ معايير التقييم</button>
+    <button class="btn btn-outline" id="sc_reset">${ICON.refresh} استعادة الإعدادات الافتراضية</button>
+    ${(!inst && others) ? `<button class="btn btn-outline" id="sc_copy">${ICON.layers} تطبيق على كل شعب المقرر (${others})</button>` : ''}
+  </div>`;
+}
+function refreshSchemeLive(){
+  const d = S.schemeDraft; if(!d) return;
+  let sum = 0;
+  CRITERIA.forEach(cr=>{
+    const c = d.scheme.criteria[cr.key]; sum += n0(c.weight);
+    const ds = describeCriterion(c);
+    const dEl = document.getElementById('sc_desc_'+cr.key); if(dEl) dEl.innerHTML = `<b>${ds.name}:</b><br>${ds.html}`;
+    const x = (d.preview[cr.key] !== undefined && Number.isFinite(d.preview[cr.key])) ? d.preview[cr.key] : Math.round(n0(c.max)*0.8*2)/2;
+    const r = evalCriterion(c, x);
+    const out = document.getElementById('sc_pvout_'+cr.key);
+    if(out) out.innerHTML = r.err ? `<span style="color:var(--red)">${escHtml(r.err)}</span>` : `${fmtN(r.earned)} من ${fmtN(r.weight)} (${Math.round(r.pct)}%)`;
+    const tag = document.getElementById('sc_tag_'+cr.key); if(tag) tag.textContent = `الوزن ${fmtN(c.weight)}%`;
+    const eEl = document.getElementById('sc_err_'+cr.key);
+    if(eEl){
+      const rr = runFormula(c.formula, {x:n0(c.max)*0.5, m:n0(c.max), w:n0(c.weight), p:0.5});
+      eEl.textContent = rr.error ? ('⚠ '+rr.error) : '';
+    }
+  });
+  const ws = document.getElementById('sc_wsum'); if(ws) ws.innerHTML = weightSumBadge(sum);
+}
+function validateScheme(sc){
+  const errs = []; let sumW = 0;
+  CRITERIA.forEach(cr=>{
+    const c = sc.criteria[cr.key];
+    const w = parseFloat(c.weight), m = parseFloat(c.max);
+    if(!Number.isFinite(w) || w < 0) errs.push(`${cr.label}: الوزن غير صالح`); else sumW += w;
+    if(!Number.isFinite(m) || m <= 0) errs.push(`${cr.label}: الحد الأعظم يجب أن يكون أكبر من صفر`);
+    if(c.method==='bands'){
+      if(!(c.bands && c.bands.length)) errs.push(`${cr.label}: أضف شريحة واحدة على الأقل`);
+      else if(c.bands.some(b=>!Number.isFinite(parseFloat(b.min)) || !Number.isFinite(parseFloat(b.pct)))) errs.push(`${cr.label}: قيم الشرائح غير مكتملة`);
+    }
+    if(c.method==='cap'){ const cp = parseFloat(c.capPct); if(!(cp>0 && cp<=100)) errs.push(`${cr.label}: حدّ الإتقان يجب أن يكون بين 1 و100`); }
+    if(c.method==='deduct' && !(parseFloat(c.perUnit) >= 0)) errs.push(`${cr.label}: قيمة الخصم غير صالحة`);
+    if(c.method==='custom'){
+      const r = runFormula(c.formula, {x:n0(c.max)*0.5, m:n0(c.max), w:n0(c.weight), p:0.5});
+      if(r.error) errs.push(`${cr.label}: ${r.error}`);
+    }
+  });
+  if(sumW <= 0) errs.push('مجموع الأوزان يجب أن يكون أكبر من صفر');
+  return errs;
+}
+function wireSchemePage(){
+  if(S.route !== 'scheme' || !S.schemeDraft) return;
+  const d = S.schemeDraft;
+  const sel = document.getElementById('sc_section');
+  if(sel) sel.onchange = ()=>{
+    const target = sel.value;
+    const go2 = ()=>{ S.schemeDraft = { sectionId:target, scheme:cloneJSON(getScheme(target)), preview:{}, dirty:false }; renderRoute(); };
+    if(d.dirty){
+      sel.value = d.sectionId;
+      confirmDialog({title:'تغييرات غير محفوظة', message:'لديك تعديلات لم تُحفظ على هذه الشعبة. هل تريد تجاهلها والانتقال إلى شعبة أخرى؟', confirmText:'تجاهل وانتقال', danger:false, onConfirm:go2});
+    } else go2();
+  };
+  document.querySelectorAll('[data-sc]').forEach(el=> el.oninput = ()=>{
+    const c = d.scheme.criteria[el.dataset.k], f = el.dataset.sc;
+    c[f] = (f==='formula') ? el.value : (el.value==='' ? '' : parseFloat(el.value));
+    d.dirty = true; refreshSchemeLive();
+  });
+  document.querySelectorAll('[data-sc-method]').forEach(el=> el.onchange = ()=>{
+    d.scheme.criteria[el.dataset.k].method = el.value; d.dirty = true; renderRoute();
+  });
+  document.querySelectorAll('[data-band]').forEach(el=> el.oninput = ()=>{
+    const b = d.scheme.criteria[el.dataset.k].bands[+el.dataset.i];
+    b[el.dataset.band] = el.value==='' ? '' : parseFloat(el.value); d.dirty = true; refreshSchemeLive();
+  });
+  document.querySelectorAll('[data-band-del]').forEach(el=> el.onclick = ()=>{
+    d.scheme.criteria[el.dataset.k].bands.splice(+el.dataset.i,1); d.dirty = true; renderRoute();
+  });
+  document.querySelectorAll('[data-band-add]').forEach(el=> el.onclick = ()=>{
+    d.scheme.criteria[el.dataset.k].bands.push({min:0,pct:0}); d.dirty = true; renderRoute();
+  });
+  document.querySelectorAll('[data-pv]').forEach(el=> el.oninput = ()=>{
+    d.preview[el.dataset.pv] = parseFloat(el.value); refreshSchemeLive();
+  });
+  const finalize = ()=>{
+    const sc = cloneJSON(d.scheme);
+    CRITERIA.forEach(cr=>{
+      const c = sc.criteria[cr.key];
+      ['weight','max','capPct','perUnit'].forEach(f=>{ c[f] = parseFloat(c[f]); });
+      c.bands = (c.bands||[]).map(b=>({min:parseFloat(b.min), pct:parseFloat(b.pct)}));
+    });
+    return sc;
+  };
+  const save = document.getElementById('sc_save');
+  if(save) save.onclick = ()=>{
+    const errs = validateScheme(d.scheme);
+    if(errs.length){ toast(errs[0] + (errs.length>1 ? ` (+${errs.length-1} ملاحظات أخرى)` : ''), 'error'); return; }
+    const sc = finalize();
+    saveScheme(d.sectionId, sc);
+    const sec = sectionOf(d.sectionId);
+    DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:'تعديل معايير التقييم للشعبة '+(sec?sec.number:'')});
+    trackUpdate('تعديل معايير التقييم', sec?('شعبة '+sec.number):'');
+    S.schemeDraft = { sectionId:d.sectionId, scheme:cloneJSON(getScheme(d.sectionId)), preview:d.preview, dirty:false };
+    renderRoute();
+    const sum = CRITERIA.reduce((a,cr)=>a+n0(sc.criteria[cr.key].weight),0);
+    toast(Math.abs(sum-100)<0.01 ? 'تم حفظ معايير التقييم وتطبيقها على طلبة الشعبة' : 'تم الحفظ — تنبيه: مجموع الأوزان ليس 100%', Math.abs(sum-100)<0.01 ? 'success' : 'warn');
+  };
+  const reset = document.getElementById('sc_reset');
+  if(reset) reset.onclick = ()=> confirmDialog({title:'استعادة الإعدادات الافتراضية', message:'سيتم استبدال المعايير المعروضة بالمقياس الافتراضي (نسبي مباشر لجميع المعايير). لن تُحفظ التغييرات حتى تضغط «حفظ».', confirmText:'استعادة', danger:false, onConfirm:()=>{
+    const keepMaxAttendance = d.scheme.criteria.attendance.max;
+    d.scheme = cloneJSON(DEFAULT_SCHEME); d.scheme.criteria.attendance.max = keepMaxAttendance; d.dirty = true; d.preview = {}; renderRoute();
+  }});
+  const copy = document.getElementById('sc_copy');
+  if(copy) copy.onclick = ()=>{
+    const errs = validateScheme(d.scheme);
+    if(errs.length){ toast(errs[0], 'error'); return; }
+    const sec = sectionOf(d.sectionId);
+    const targets = DB.data.sections.filter(s=>s.courseId===sec.courseId && s.id!==sec.id);
+    confirmDialog({title:'تطبيق على كل شعب المقرر', message:`سيتم استبدال مقياس التقييم في ${targets.length} شعبة أخرى من المقرر نفسه بالمقياس المعروض الآن (وسيُحفظ المقياس الحالي أيضًا). هل تريد المتابعة؟`, confirmText:'تطبيق', danger:false, onConfirm:()=>{
+      const sc = finalize();
+      saveScheme(d.sectionId, sc);
+      targets.forEach(t=> saveScheme(t.id, sc));
+      DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:'تعميم معايير التقييم على شعب المقرر '+((courseOf(sec.courseId)||{}).name||'')});
+      S.schemeDraft = { sectionId:d.sectionId, scheme:cloneJSON(getScheme(d.sectionId)), preview:d.preview, dirty:false };
+      renderRoute(); toast('تم تعميم معايير التقييم على شعب المقرر');
+    }});
+  };
+  refreshSchemeLive();
+}
+
+/* ================================ Excel: قالب / تصدير / استيراد ================================ */
+/* أعمدة ملف الاستيراد (بالترتيب المعتمد). تُقبل عدة صيغ لعناوين الأعمدة. */
+const IMPORT_COLUMNS = [
+  {key:'studentId',  label:'الرقم الجامعي',       aliases:['الرقم الجامعي','الرقم الاكاديمي','رقم الطالب','الرقم','student id','studentid','id']},
+  {key:'name',       label:'اسم الطالب',          aliases:['اسم الطالب','الاسم','اسم','student name','studentname','name']},
+  {key:'attendance', label:'عدد ساعات الحضور',    aliases:['عدد ساعات الحضور','ساعات الحضور','عدد الساعات','الحضور','attendance hours','attendance']},
+  {key:'activities', label:'درجة الأنشطة',        aliases:['درجة الأنشطة','درجة الانشطة','الأنشطة','الانشطة','activities','activity']},
+  {key:'exercises',  label:'درجة التمارين',       aliases:['درجة التمارين','التمارين','exercises','exercise']},
+  {key:'homework',   label:'درجة الواجب الورقي',  aliases:['درجة الواجب الورقي','الواجب الورقي','درجة الواجب','الواجب','homework','paper homework']},
+  {key:'midterm',    label:'درجة المنتصف',        aliases:['درجة المنتصف','درجة اختبار المنتصف','المنتصف','الاختبار النصفي','midterm']},
+  {key:'evaluation', label:'تقييم المدرس',        aliases:['تقييم المدرس','تقييم المدرّس','التقييم','evaluation','instructor evaluation']},
+];
+function findHeader(keys, aliases){
+  for(const a of aliases){
+    const n = normalizeExcelHeader(a);
+    const k = keys.find(x=>normalizeExcelHeader(x)===n);
+    if(k !== undefined) return k;
+  }
+  return null;
+}
+function normDigits(s){
+  return String(s ?? '').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+}
+function toNum(v){
+  if(typeof v === 'number') return Number.isFinite(v) ? v : NaN;
+  let s = normDigits(v).trim();
+  if(!s) return NaN;
+  s = s.replace(/٫/g,'.').replace(/٬/g,'');
+  if(!s.includes('.')) s = s.replace(',','.'); else s = s.replace(/,/g,'');
+  const m = s.match(/-?\d+(?:\.\d+)?/);
+  return m ? parseFloat(m[0]) : NaN;
+}
+function normStudentId(v){
+  if(typeof v === 'number') return String(Math.trunc(v));
+  return normDigits(v).trim().replace(/\.0+$/,'');
+}
+
+function exportRows(students){
+  return students.map(s=>{
+    const r = classify(s), c = courseOf(s.courseId), sec = sectionOf(s.sectionId), sc = s.scores || {};
+    const row = {};
+    row['الرقم الجامعي'] = s.studentId ?? '';
+    row['اسم الطالب'] = s.name ?? '';
+    CRITERIA.forEach(cr=>{ row[IMPORT_COLUMNS.find(x=>x.key===cr.key).label] = n0(sc[cr.key]); });
+    row['المقرر'] = c?.name ?? '';
+    row['الشعبة'] = sec?.number ?? '';
+    row['المدرس'] = instructorOf(sec?.instructorId)?.name ?? '';
+    CRITERIA.forEach(cr=>{ row['المكتسب — '+cr.label] = Math.round(r.parts[cr.key].earned*100)/100; });
+    row['المجموع %'] = r.score;
+    row['الحالة'] = STATUS_LABEL[r.status] ?? r.status ?? '';
+    return row;
+  });
+}
+function exportSchemeRows(students){
+  const secIds = [...new Set(students.map(s=>s.sectionId))];
+  const out = [];
+  secIds.forEach(id=>{
+    const sec = sectionOf(id), c = courseOf(sec?.courseId), sc = getScheme(id);
+    CRITERIA.forEach(cr=>{
+      const cc = sc.criteria[cr.key], d = describeCriterion(cc);
+      out.push({'المقرر':c?.name??'', 'الشعبة':sec?.number??'', 'المعيار':cr.label, 'الوزن %':cc.weight, 'الحد الأعظم':cc.max, 'الآلية':d.name, 'طريقة الحساب':d.plain});
+    });
+  });
+  return out;
+}
 function exportStudentsExcel(students){
+  if(!students || !students.length){ toast('لا توجد بيانات طلاب لتصديرها.', 'warn'); return; }
+  const rows = exportRows(students);
   if(typeof XLSX === 'undefined'){
-    exportStudentsCSVFallback(students);
+    exportStudentsCSVFallback(rows);
     toast('تم تصدير البيانات بصيغة CSV لأن مكتبة Excel غير متاحة.', 'warn');
     return;
   }
-  if(!students || !students.length){
-    toast('لا توجد بيانات طلاب لتصديرها.', 'warn');
-    return;
-  }
-  const rows = students.map(s=>{
-    const r=classify(s);
-    const c=courseOf(s.courseId);
-    const sec=sectionOf(s.sectionId);
-    const actAvg=Math.round((Number(s.activities?.activity||0)+Number(s.activities?.assignment||0)+Number(s.activities?.participation||0))/3);
-    const evalAvg=Math.round((Number(s.evaluation?.score||0)+Number(s.evaluation?.participation||0)+Number(s.evaluation?.engagement||0))/3);
-    return {
-      'الرقم الجامعي': s.studentId ?? '',
-      'الاسم': s.name ?? '',
-      'المقرر': c?.name ?? '',
-      'الشعبة': sec?.number ?? '',
-      'المدرس': instructorOf(sec?.instructorId)?.name ?? '',
-      'نسبة الحضور': `${r.attRate}%`,
-      'الأنشطة': `${actAvg}%`,
-      'التمارين': `${s.exercises?.pct ?? 0}%`,
-      'المنتصف': `${s.midterm?.score ?? 0}/${s.midterm?.max ?? 40}`,
-      'تقييم المدرس': `${evalAvg}%`,
-      'الحالة': STATUS_LABEL[r.status] ?? r.status ?? ''
-    };
-  });
-  const ws=XLSX.utils.json_to_sheet(rows);
-  ws['!cols']=[{wch:18},{wch:30},{wch:32},{wch:12},{wch:22},{wch:16},{wch:14},{wch:14},{wch:14},{wch:18},{wch:20}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'الطلبة');
-  XLSX.writeFile(wb,`تقرير_معيار_${new Date().toISOString().slice(0,10)}.xlsx`);
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = Object.keys(rows[0]).map((k,i)=>({wch: i===1?30 : i<8?18 : 16}));
+  const ws2 = XLSX.utils.json_to_sheet(exportSchemeRows(students));
+  ws2['!cols'] = [{wch:28},{wch:10},{wch:18},{wch:10},{wch:12},{wch:22},{wch:70}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
+  XLSX.utils.book_append_sheet(wb, ws2, 'مقياس التقييم');
+  wb.Workbook = { Views:[{RTL:true}] };
+  XLSX.writeFile(wb, `تقرير_معيار_${new Date().toISOString().slice(0,10)}.xlsx`);
   toast(`تم تصدير ${rows.length} طالبًا إلى ملف Excel بنجاح`);
 }
-
-function exportStudentsCSVFallback(students){
-  if(!students || !students.length){ toast('لا توجد بيانات طلاب لتصديرها.', 'warn'); return; }
-  const esc=v=>`"${String(v ?? '').replace(/"/g,'""')}"`;
-  const lines=[];
-  lines.push(['الرقم الجامعي','الاسم','المقرر','الشعبة','المدرس','نسبة الحضور','الأنشطة','التمارين','المنتصف','تقييم المدرس','الحالة'].map(esc).join(','));
-  students.forEach(s=>{
-    const r=classify(s), c=courseOf(s.courseId), sec=sectionOf(s.sectionId), inst=instructorOf(sec?.instructorId);
-    const actAvg=Math.round((Number(s.activities?.activity||0)+Number(s.activities?.assignment||0)+Number(s.activities?.participation||0))/3);
-    const evalAvg=Math.round((Number(s.evaluation?.score||0)+Number(s.evaluation?.participation||0)+Number(s.evaluation?.engagement||0))/3);
-    lines.push([s.studentId,s.name,c?.name||'',sec?.number||'',inst?.name||'',`${r.attRate}%`,`${actAvg}%`,`${s.exercises?.pct||0}%`,`${s.midterm?.score||0}/${s.midterm?.max||40}`,`${evalAvg}%`,STATUS_LABEL[r.status]||r.status].map(esc).join(','));
-  });
-  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
-  const url=URL.createObjectURL(blob); const a=document.createElement('a');
-  a.href=url; a.download=`تقرير_معيار_${new Date().toISOString().slice(0,10)}.csv`;
+function exportStudentsCSVFallback(rows){
+  const esc = v=>`"${String(v ?? '').replace(/"/g,'""')}"`;
+  const keys = Object.keys(rows[0]);
+  const lines = [keys.map(esc).join(',')].concat(rows.map(r=>keys.map(k=>esc(r[k])).join(',')));
+  const blob = new Blob(['\uFEFF'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a');
+  a.href = url; a.download = `تقرير_معيار_${new Date().toISOString().slice(0,10)}.csv`;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+function exportCSV(students){ exportStudentsExcel(students); }
 
-function exportCSV(students){
-  exportStudentsExcel(students);
+function downloadStudentsTemplate(){
+  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت.', 'error'); return; }
+  const headers = IMPORT_COLUMNS.map(c=>c.label);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ['2044001','مثال: عبدالله محمد',26,9,13,8,24,17], ['2044002','مثال: سارة أحمد',22,8,12,9,27,18]]);
+  ws['!cols'] = [{wch:16},{wch:28},{wch:18},{wch:14},{wch:14},{wch:20},{wch:14},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
+  wb.Workbook = { Views:[{RTL:true}] };
+  XLSX.writeFile(wb, 'قالب_استيراد_الطلبة.xlsx');
 }
 
-async function handleExcelImport(file){
-  if(typeof XLSX === 'undefined'){
-    toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت ثم أعد فتح الصفحة.', 'error');
-    return;
+async function readSpreadsheetRows(file){
+  const isCSV = /\.(csv|txt)$/i.test(file.name);
+  let wb;
+  if(isCSV){ wb = XLSX.read(await file.text(), {type:'string', raw:false}); }
+  else { wb = XLSX.read(await file.arrayBuffer(), {type:'array', cellDates:true}); }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws, {defval:''});
+}
+
+async function startExcelImport(file){
+  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت ثم أعد فتح الصفحة.', 'error'); return; }
+  let rows;
+  try{ rows = await readSpreadsheetRows(file); }
+  catch(err){ console.error('Excel import error:', err); toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`, 'error'); return; }
+  if(!rows.length){ toast('الملف فارغ أو لا يحتوي على صفوف بيانات.', 'warn'); return; }
+
+  const keys = Object.keys(rows[0]);
+  const map = {};
+  IMPORT_COLUMNS.forEach(col=>{ map[col.key] = findHeader(keys, col.aliases); });
+  if(!map.studentId || !map.name){
+    toast('لم يتم العثور على عمودي «الرقم الجامعي» و«اسم الطالب». استخدم زر «تنزيل القالب» لمعرفة الأعمدة المطلوبة.', 'error'); return;
   }
-  try{
-    const isCSV = /\.(csv|txt)$/i.test(file.name);
-    let rows=[];
-    if(isCSV){
-      const text=await file.text();
-      const wb=XLSX.read(text,{type:'string',raw:false});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      rows=XLSX.utils.sheet_to_json(ws,{defval:''});
-    }else{
-      const data=await file.arrayBuffer();
-      const wb=XLSX.read(data,{type:'array',cellDates:true});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      rows=XLSX.utils.sheet_to_json(ws,{defval:''});
-    }
-
-    if(!rows.length){ toast('الملف فارغ أو لا يحتوي على صفوف بيانات.', 'warn'); return; }
-
-    const newCoursesMap = new Map();
-    const newSectionsMap = new Map();
-    const newInstructorsMap = new Map();
-    const newStudents = [];
-    let addedCount = 0;
-
-    rows.forEach((row, idx)=>{
-      const studentId = String(excelValue(row,['الرقم الجامعي','الرقم','رقم الطالب','student id','studentid','id'])||'').trim();
-      const name = String(excelValue(row,['الاسم','اسم الطالب','اسم','student name','studentname','name'])||'').trim();
-      if(!studentId || !name) return;
-
-      let courseName = String(excelValue(row,['المقرر','اسم المقرر','course','course name'])||'مقرر عام').trim();
-      let courseCode = String(excelValue(row,['رمز المقرر','course code','code'])||('10'+(newCoursesMap.size+1))).trim();
-      let secNumber = String(excelValue(row,['الشعبة','رقم الشعبة','section','section number'])||'101').trim();
-      let instrName = String(excelValue(row,['المدرس','عضو هيئة التدريس','المعلم','instructor','teacher'])||'د. مدرس مقرر').trim();
-
-      let courseKey = normalizeExcelHeader(courseName);
-      let courseObj = newCoursesMap.get(courseKey);
-      if(!courseObj){
-        courseObj = { id: uid('c'), code: courseCode, name: courseName, desc: 'مقرر مستورد من ملف Excel', active: true };
-        newCoursesMap.set(courseKey, courseObj);
-      }
-
-      let instrKey = normalizeExcelHeader(instrName);
-      let instrObj = newInstructorsMap.get(instrKey);
-      if(!instrObj){
-        let instId = uid('inst');
-        instrObj = {
-          id: instId, name: instrName, username: 'inst_'+(newInstructorsMap.size+1), password:'1234',
-          email:'inst_'+(newInstructorsMap.size+1)+'@ksu.edu.sa', courseId: courseObj.id, sectionId: '',
-          role:'instructor', status:'active', lastLogin: daysAgoISO(0),
-          kpis:{ lectures: 92, plan: 90, officeHours: 88, grading: 90, submission: 95 }
-        };
-        newInstructorsMap.set(instrKey, instrObj);
-      }
-
-      let secKey = courseObj.id+'_'+secNumber;
-      let secObj = newSectionsMap.get(secKey);
-      if(!secObj){
-        secObj = { id: uid('sec'), courseId: courseObj.id, number: secNumber, instructorId: instrObj.id, semester: 'الأول', year: '1447هـ', status: 'active' };
-        newSectionsMap.set(secKey, secObj);
-        if(!instrObj.sectionId) instrObj.sectionId = secObj.id;
-      }
-
-      const attendance = parsePercentValue(excelValue(row,['نسبة الحضور','الحضور','attendance']),85);
-      const activities = parsePercentValue(excelValue(row,['الأنشطة','activities','activity']),75);
-      const exercises = parsePercentValue(excelValue(row,['التمارين','exercises','exercise']),75);
-      const midtermRaw = String(excelValue(row,['المنتصف','الاختبار النصفي','midterm'])||'');
-      const midtermScore = parseScoreValue(midtermRaw, 25);
-      const midtermMax = parseScoreValue(midtermRaw.match(/\/\s*(\d+(?:\.\d+)?)/)?.[1] || '40', 40);
-      const evaluation = parsePercentValue(excelValue(row,['تقييم المدرس','التقييم','evaluation','instructor evaluation']),80);
-
-      const total = 28;
-      const attended = Math.round((attendance/100)*total);
-
-      newStudents.push({
-        id: uid('stu'),
-        studentId,
-        name,
-        courseId: courseObj.id,
-        sectionId: secObj.id,
-        level: 'السنة الأولى المشتركة',
-        attendance:{ total, attended, absent: Math.max(0, total-attended) },
-        activities:{ activity: activities, assignment: activities, participation: activities },
-        exercises:{ avg: exercises, weak: 0, pct: exercises },
-        midterm:{ score: midtermScore, max: midtermMax },
-        evaluation:{ score: evaluation, participation: evaluation, engagement: evaluation, comment: 'تمت إعادة التهيئة والاستيراد من ملف Excel' },
-        notes: 'مستورد وفق المدخلات الجديدة',
-        interventions: [],
-        history: buildFlatHistory(),
-        createdAt: daysAgoISO(0)
-      });
-      addedCount++;
+  const missingCols = IMPORT_COLUMNS.filter(c=>!map[c.key]).map(c=>c.label);
+  const records = new Map(); let skipped = 0, dup = 0, badCells = 0;
+  const colMax = {}; CRITERIA.forEach(cr=>{ colMax[cr.key] = 0; });
+  rows.forEach(row=>{
+    const sid = normStudentId(row[map.studentId]);
+    const name = String(row[map.name] ?? '').trim();
+    if(!sid || !name){ skipped++; return; }
+    const scores = {};
+    CRITERIA.forEach(cr=>{
+      const h = map[cr.key]; let n = h ? toNum(row[h]) : NaN;
+      if(h && (!Number.isFinite(n) || n < 0)) badCells++;
+      if(!Number.isFinite(n) || n < 0) n = 0;
+      scores[cr.key] = n; colMax[cr.key] = Math.max(colMax[cr.key], n);
     });
+    if(records.has(sid)) dup++;
+    records.set(sid, {studentId:sid, name, scores});
+  });
+  if(!records.size){ toast('لم يتم العثور على صفوف صالحة (يلزم الرقم الجامعي والاسم).', 'warn'); return; }
+  showImportDialog({fileName:file.name, records:[...records.values()], missingCols, skipped, dup, badCells, colMax});
+}
 
-    if(newStudents.length > 0){
-      DB.data.courses = Array.from(newCoursesMap.values());
-      DB.data.sections = Array.from(newSectionsMap.values());
-      DB.data.instructors = Array.from(newInstructorsMap.values());
-      DB.data.students = newStudents;
-      
-      DB.data.users = [
-        DB.data.users.find(u=>u.role==='admin') || {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin:daysAgoISO(0)},
-        ...DB.data.instructors.map(i=>({id:i.id, name:i.name, username:i.username, password:i.password, role:'instructor', email:i.email, status:i.status, lastLogin:i.lastLogin, courseId:i.courseId, sectionId:i.sectionId}))
-      ];
+function showImportDialog(info){
+  const inst = currentInstructor();
+  const secs = inst ? DB.data.sections.filter(s=>s.id===inst.sectionId) : DB.data.sections;
+  if(!secs.length){ toast('لا توجد شعبة لاستيراد الطلبة إليها. أضف شعبة أولًا.', 'error'); return; }
+  let target = inst ? inst.sectionId : ((S.studentFilters.sectionId !== 'all' && secs.find(s=>s.id===S.studentFilters.sectionId)) ? S.studentFilters.sectionId : secs[0].id);
+  let mode = 'merge';
 
-      DB.save();
-      renderRoute();
-      toast(`تمت إعادة التهيئة بنجاح واستيراد ${addedCount} طالبًا مع المقررات والشعب والمدرسين الجدد!`);
-    } else {
-      toast('لم يتم العثور على بيانات صالحة في الملف. تأكد من وجود أعمدة الرقم الجامعي والاسم.', 'warn');
-    }
-  }catch(err){
-    console.error('Excel import error:', err);
-    toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`,'error');
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal modal-lg">
+    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:16px;">استيراد الطلبة من ملف Excel</h3><button class="icon-btn" id="imp_close">${ICON.x}</button></div>
+    <div class="modal-body" id="imp_body"></div>
+    <div class="modal-foot"><button class="btn btn-outline" id="imp_cancel">إلغاء</button><button class="btn btn-primary" id="imp_ok">${ICON.upload} استيراد</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#imp_close').onclick = ()=>ov.remove();
+  ov.querySelector('#imp_cancel').onclick = ()=>ov.remove();
+
+  function draw(){
+    const scheme = getScheme(target);
+    const sec = sectionOf(target), crs = courseOf(sec?.courseId);
+    const existing = DB.data.students.filter(s=>s.sectionId===target).length;
+    const chips = [
+      `<span class="tag-pill">${escHtml(info.fileName)}</span>`,
+      `<span class="badge b-green"><span class="dot"></span>${info.records.length} طالبًا صالحًا</span>`,
+      info.skipped ? `<span class="badge b-amber"><span class="dot"></span>${info.skipped} صفوف بلا رقم/اسم تم تجاهلها</span>` : '',
+      info.dup ? `<span class="badge b-amber"><span class="dot"></span>${info.dup} أرقام جامعية مكررة (اعتُمد آخر صف)</span>` : '',
+      info.badCells ? `<span class="badge b-amber"><span class="dot"></span>${info.badCells} خلية فارغة/غير رقمية عُدّت صفرًا</span>` : '',
+    ].join(' ');
+    ov.querySelector('#imp_body').innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">${chips}</div>
+      ${info.missingCols.length ? `<div style="background:var(--amber-bg);color:var(--text);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px;line-height:1.8;">${ICON.alert} أعمدة غير موجودة في الملف وستُعتبر صفرًا لجميع الطلبة: <b>${info.missingCols.join('، ')}</b></div>` : ''}
+      <div class="grid g-2">
+        ${inst ? `<div class="field"><label>الشعبة المستهدفة</label><input type="text" disabled value="${escHtml((crs?crs.name:'')+' — شعبة '+(sec?sec.number:''))}"></div>`
+               : `<div class="field"><label>الشعبة المستهدفة</label><select id="imp_section">${secs.map(s=>`<option value="${s.id}" ${s.id===target?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select></div>`}
+        <div class="field"><label>طريقة الاستيراد</label>
+          <select id="imp_mode">
+            <option value="merge" ${mode==='merge'?'selected':''}>تحديث الموجودين وإضافة الجدد (يحفظ التدخلات والملاحظات)</option>
+            <option value="replace" ${mode==='replace'?'selected':''}>استبدال جميع طلبة الشعبة (${existing} حاليًا)</option>
+          </select></div>
+      </div>
+      <h4 class="font-head" style="font-size:13.5px;margin:6px 0 4px;">الحدود العظمى للمعايير</h4>
+      <p class="table-sub" style="margin:0 0 10px;">هذه الحدود تُحوِّل الدرجات الخام إلى نسب (ويمكن تعديل آلية الحساب لاحقًا من صفحة «معايير التقييم»). تأكد أن إجمالي الساعات والدرجات العظمى صحيحة.</p>
+      <div class="scrollx"><table><thead><tr><th>المعيار</th><th>أعلى قيمة في الملف</th><th>الحد الأعظم المعتمد</th></tr></thead><tbody>
+        ${CRITERIA.map(cr=>{ const cur = scheme.criteria[cr.key].max, fm = info.colMax[cr.key]; const over = fm > cur;
+          return `<tr><td><b>${cr.label}</b><div class="table-sub">${cr.maxLabel}</div></td><td>${fmtN(fm)}${over?` <span class="badge b-amber" style="margin-inline-start:6px;"><span class="dot"></span>أعلى من الحد المعتمد</span>`:''}</td>
+          <td><input type="number" min="0.5" step="0.5" id="imp_max_${cr.key}" value="${cur}" style="max-width:130px;"></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <h4 class="font-head" style="font-size:13.5px;margin:18px 0 8px;">معاينة أول ${Math.min(5, info.records.length)} صفوف</h4>
+      <div class="scrollx"><table><thead><tr>${IMPORT_COLUMNS.map(c=>`<th>${c.label}</th>`).join('')}</tr></thead><tbody>
+        ${info.records.slice(0,5).map(rec=>`<tr><td>${escHtml(rec.studentId)}</td><td>${escHtml(rec.name)}</td>${CRITERIA.map(cr=>`<td>${fmtN(rec.scores[cr.key])}</td>`).join('')}</tr>`).join('')}
+      </tbody></table></div>`;
+    const secSel = ov.querySelector('#imp_section'); if(secSel) secSel.onchange = ()=>{ target = secSel.value; mode = ov.querySelector('#imp_mode').value; draw(); };
+    ov.querySelector('#imp_mode').onchange = e=>{ mode = e.target.value; };
   }
+  draw();
+
+  ov.querySelector('#imp_ok').onclick = ()=>{
+    mode = ov.querySelector('#imp_mode').value;
+    const maxes = {}; let bad = false;
+    CRITERIA.forEach(cr=>{ const v = parseFloat(ov.querySelector('#imp_max_'+cr.key).value); maxes[cr.key] = v; if(!(v > 0)) bad = true; });
+    if(bad){ toast('أدخل حدًا أعظم صحيحًا (أكبر من صفر) لكل معيار.', 'error'); return; }
+    const sec = sectionOf(target);
+    const sc = cloneJSON(getScheme(target)); let changed = false;
+    CRITERIA.forEach(cr=>{ if(sc.criteria[cr.key].max !== maxes[cr.key]){ sc.criteria[cr.key].max = maxes[cr.key]; changed = true; } });
+    if(changed) saveScheme(target, sc);
+    if(mode === 'replace') DB.data.students = DB.data.students.filter(s=>s.sectionId !== target);
+    const idx = new Map(DB.data.students.filter(s=>s.sectionId===target).map(s=>[String(s.studentId), s]));
+    let added = 0, updated = 0;
+    info.records.forEach(rec=>{
+      const ex = idx.get(rec.studentId);
+      if(ex){ ex.name = rec.name; ex.scores = rec.scores; updated++; }
+      else { DB.data.students.push({ id:uid('stu'), studentId:rec.studentId, name:rec.name, courseId:sec.courseId, sectionId:target, level:'السنة الأولى المشتركة',
+                scores:rec.scores, comment:'', notes:'', interventions:[], createdAt:daysAgoISO(0) }); added++; }
+    });
+    DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:`استيراد ملف Excel إلى الشعبة ${sec.number} (${added} جديد، ${updated} محدَّث)`});
+    trackUpdate('استيراد ملف Excel', `شعبة ${sec.number}: ${info.records.length} طالب`);
+    if(!currentInstructor()) S.studentFilters.sectionId = target;
+    S.studentPage = 1;
+    DB.save();
+    ov.remove();
+    renderRoute();
+    toast(`تم الاستيراد: ${added} طالبًا جديدًا و${updated} محدَّثًا${changed?' — وتم تحديث الحدود العظمى للمعايير':''}.`);
+  };
 }
 
 /* ================================ Cloud Sync + Instructor Update Tracking ================================ */
@@ -1996,10 +2440,12 @@ const SYNC = {
         users:d.users, settings:d.settings, auditLogs:d.auditLogs.slice(0,100)
       });
       await this.req('/students','PUT',bySec);
+      await this.req('/schemes','PUT',d.schemes||{});
       this.ready = true;
     } else if(this.ready){
       const inst = currentInstructor(); if(!inst) return;
       await this.req('/students/'+inst.sectionId,'PUT', d.students.filter(s=>s.sectionId===inst.sectionId));
+      if(d.schemes && d.schemes[inst.sectionId]) await this.req('/schemes/'+inst.sectionId,'PUT', d.schemes[inst.sectionId]);
     }
   },
   async pull(){
@@ -2014,9 +2460,10 @@ const SYNC = {
     ['courses','sections','instructors','users'].forEach(k=> d[k] = Object.values(b[k]||{}));
     d.settings = b.settings || d.settings;
     d.auditLogs = Object.values(b.auditLogs||{});
+    if(all.schemes) d.schemes = all.schemes;
     d.students = Object.values(all.students||{}).flatMap(a=> Object.values(a||{})).map(s=>{
       s.interventions = Object.values(s.interventions||{});
-      s.history = Object.values(s.history||{});
+      ensureScores(s);
       return s;
     });
     d.updates = Object.values(all.updates||{}).sort((a,b)=> b.time.localeCompare(a.time)).slice(0,300);
