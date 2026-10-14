@@ -246,7 +246,7 @@ textarea{resize:vertical;min-height:76px;}
 .mono{font-family:ui-monospace,Consolas,monospace;direction:ltr;text-align:left;}
 .scheme-table td,.scheme-table th{vertical-align:top;}
 
-@media print{
+@print{
   .sidebar,.topbar,.no-print,.page-head,.breadcrumb,.mobile-scrim,#toastWrap{display:none !important;}
   .shell,.main{display:block !important;}
   .content{padding:0 !important;}
@@ -317,7 +317,7 @@ function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
 
 /* ================================ DB (local) ================================ */
 const DB = {
-  KEY:'miyar_academic_perf_v7',
+  KEY:'miyar_academic_perf_v8',
   data:null,
   load(){
     try{
@@ -347,12 +347,11 @@ const DEFAULT_SETTINGS = {
 };
 
 /* ================================ Evaluation scheme (dynamic criteria) ================================ */
-/* كل شعبة لها «مقياس تقييم» يضبطه مدرس المادة: لكل معيار وزن + حد أعظم للدرجة الخام + آلية حساب. */
 const CRITERIA = [
-  {key:'attendance', label:'الحضور',          raw:'عدد ساعات الحضور',    unit:'ساعة',  maxLabel:'إجمالي ساعات المقرر'},
-  {key:'activities', label:'الأنشطة',         raw:'درجة الأنشطة',        unit:'درجة', maxLabel:'الدرجة العظمى للأنشطة'},
+  {key:'attendance', label:'الحضور',        raw:'عدد ساعات الحضور',    unit:'ساعة',  maxLabel:'إجمالي ساعات المقرر'},
+  {key:'activities', label:'الأنشطة',        raw:'درجة الأنشطة',        unit:'درجة', maxLabel:'الدرجة العظمى للأنشطة'},
   {key:'exercises',  label:'التمارين',        raw:'درجة التمارين',       unit:'درجة', maxLabel:'الدرجة العظمى للتمارين'},
-  {key:'homework',   label:'الواجب الورقي',   raw:'درجة الواجب الورقي',  unit:'درجة', maxLabel:'الدرجة العظمى للواجب الورقي'},
+  {key:'homework',   label:'الواجب الورقي',    raw:'درجة الواجب الورقي',   unit:'درجة', maxLabel:'الدرجة العظمى للواجب الورقي'},
   {key:'midterm',    label:'اختبار المنتصف',  raw:'درجة المنتصف',        unit:'درجة', maxLabel:'الدرجة العظمى لاختبار المنتصف'},
   {key:'evaluation', label:'تقييم المدرس',    raw:'تقييم المدرس',        unit:'درجة', maxLabel:'الدرجة العظمى لتقييم المدرس'},
 ];
@@ -381,7 +380,6 @@ const DEFAULT_SCHEME = { criteria:{
   evaluation: defaultCriterion(20,20),
 }};
 
-/* ---- محرّك المعادلات المخصصة (آمن: قائمة بيضاء للرموز والدوال فقط) ---- */
 const FORMULA_FUNCS = { min:Math.min, max:Math.max, sqrt:Math.sqrt, abs:Math.abs, round:Math.round, floor:Math.floor, ceil:Math.ceil, pow:Math.pow, iff:(c,a,b)=>(c?a:b) };
 const _formulaCache = new Map();
 function compileFormula(src){
@@ -393,8 +391,6 @@ function compileFormula(src){
   const allowed = new Set(['x','m','w','p', ...Object.keys(FORMULA_FUNCS)]);
   for(const id of (s.match(/[A-Za-z_]\w*/g) || [])){ if(!allowed.has(id)) throw new Error('رمز غير مسموح في المعادلة: '+id); }
   if(/[^0-9A-Za-z_+\-*/%().,<>=!&|?:\s]/.test(s)) throw new Error('المعادلة تحتوي على رموز غير مسموحة');
-  if(/[^0-9]\.|\.[^0-9]/.test(s)) throw new Error('صيغة الأرقام العشرية غير صحيحة');
-  if(s.replace(/===|!==|==|!=|<=|>=/g,'').includes('=')) throw new Error('علامة = غير مسموحة (استخدم == للمقارنة)');
   let fn;
   try{ fn = new Function('x','m','w','p','F','"use strict"; const {min,max,sqrt,abs,round,floor,ceil,pow,iff}=F; return ('+s+');'); }
   catch(e){ throw new Error('صيغة المعادلة غير صحيحة'); }
@@ -410,7 +406,6 @@ function runFormula(src, vars){
   }catch(e){ return {error: e.message || 'خطأ في المعادلة'}; }
 }
 
-/* ---- حساب الدرجة المكتسبة لمعيار واحد وفق الآلية المختارة ---- */
 function evalCriterion(c, raw){
   const w = Math.max(0, n0(c.weight)), m = n0(c.max);
   const x = Math.max(0, n0(raw));
@@ -442,30 +437,28 @@ function evalCriterion(c, raw){
   return { earned, weight:w, pct: w>0 ? earned/w*100 : 0, p, err };
 }
 
-/* ---- وصف الآلية المختارة بلغة مقروءة (يُستخدم في صفحة المعايير والتقارير) ---- */
 function describeCriterion(c){
   const w = fmtN(c.weight), m = fmtN(c.max);
   const name = (METHODS[c.method] || METHODS.linear).label;
   let lines = [];
   switch(c.method){
     case 'cap':
-      lines = [`درجة كاملة (${w}) عند بلوغ ${fmtN(c.capPct)}% من ${m}، وتناسبيًا قبل ذلك: (الدرجة ÷ (${m} × ${fmtN(c.capPct)}%)) × ${w}`]; break;
+      lines = [`درجة كاملة (${w}) عند بلوغ ${fmtN(c.capPct)}% من ${m}، وتناسبيًا قبل ذلك`]; break;
     case 'bands': {
       const bs = (Array.isArray(c.bands)? c.bands : []).slice().sort((a,b)=>n0(b.min)-n0(a.min));
-      lines = bs.map(b=>`إذا بلغت النسبة ≥ ${fmtN(b.min)}% من ${m} ← ${fmtN(b.pct)}% من الوزن (${fmtN(n0(c.weight)*n0(b.pct)/100)})`);
+      lines = bs.map(b=>`إذا بلغت النسبة ≥ ${fmtN(b.min)}% من ${m} ← ${fmtN(b.pct)}% من الوزن`);
       if(!lines.length) lines = ['لا توجد شرائح معرّفة']; break;
     }
     case 'deduct':
       lines = [`${w} − ((${m} − الدرجة) × ${fmtN(c.perUnit)})، وبحدّ أدنى صفر`]; break;
     case 'custom':
-      lines = [`المعادلة: ${c.formula}  (x = الدرجة الخام، m = الحد الأعظم ${m}، w = الوزن ${w}، p = x ÷ m)`]; break;
+      lines = [`المعادلة: ${c.formula}`]; break;
     default:
       lines = [`(الدرجة ÷ ${m}) × ${w}`];
   }
   return { name, lines, html: lines.map(escHtml).join('<br>'), plain: lines.join('؛ ') };
 }
 
-/* ---- قراءة مقياس شعبة (مع تطبيع وكاش) ---- */
 const _schemeCache = new WeakMap();
 let _defaultSchemeNorm = null;
 function normalizeScheme(sc){
@@ -502,7 +495,6 @@ function saveScheme(sectionId, scheme){
   DB.save();
 }
 
-/* ---- ترحيل بيانات الهيكل القديم (إن وُجدت) إلى الهيكل الجديد ---- */
 function ensureScores(s){
   if(!s || s.scores) return s;
   const a=s.attendance||{}, ac=s.activities||{}, ex=s.exercises||{}, mi=s.midterm||{}, ev=s.evaluation||{};
@@ -583,14 +575,8 @@ function seedData(){
     }
   });
 
-  /* مقياس التقييم لكل شعبة (الافتراضي نسبي مباشر). شعبة تجريبية واحدة تُظهر الآليات الأخرى. */
   const schemes = {};
   sections.forEach(sec=>{ schemes[sec.id] = cloneJSON(DEFAULT_SCHEME); });
-  if(sections[2]){
-    const demo = schemes[sections[2].id].criteria;
-    demo.attendance.method = 'bands';
-    demo.exercises.method = 'cap'; demo.exercises.capPct = 85;
-  }
 
   const users = [
     {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin: daysAgoISO(0)},
@@ -599,22 +585,17 @@ function seedData(){
 
   const auditLogs = [
     {id:uid('log'),time:daysAgoISO(0),user:'إدارة النظام',action:'تسجيل الدخول إلى لوحة الإدارة'},
-    {id:uid('log'),time:daysAgoISO(0),user:instructors[0].name,action:'تحديث بيانات طالب في الشعبة '+sections[0].number},
-    {id:uid('log'),time:daysAgoISO(1),user:instructors[2].name,action:'إدخال درجات اختبار المنتصف'},
-    {id:uid('log'),time:daysAgoISO(2),user:'إدارة النظام',action:'إضافة شعبة جديدة للمقرر '+courses[1].name},
-    {id:uid('log'),time:daysAgoISO(3),user:instructors[4].name,action:'تسجيل تدخل أكاديمي لطالب'},
   ];
 
   return {
     courses, sections, instructors, students, users, auditLogs, schemes,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-    meta:{ version:'4.0.0', seededAt: new Date().toISOString() }
+    meta:{ version:'4.1.0', seededAt: new Date().toISOString() }
   };
 }
 function weightedPick(pairs){ const r=rnd(); let acc=0; for(const [k,w] of pairs){acc+=w; if(r<=acc) return k;} return pairs[pairs.length-1][0]; }
 function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
-/* ================================ Classification engine ================================ */
-/* الدرجة الكلية = مجموع الدرجات المكتسبة ÷ مجموع الأوزان × 100، وتُحسب كل درجة وفق آلية المعيار التي اختارها المدرس. */
+
 function classify(student, settings){
   settings = settings || DB.data.settings;
   const scheme = getScheme(student.sectionId);
@@ -639,7 +620,6 @@ function badgeHTML(status, withLabel){
   return `<span class="badge ${cls}"><span class="dot"></span>${withLabel? STATUS_LABEL[status] : STATUS_SHORT[status]}</span>`;
 }
 
-/* ================================ App State ================================ */
 const S = {
   user:null,
   route:'dashboard',
@@ -675,7 +655,6 @@ function computeStats(students){
   };
 }
 
-/* ================================ Toasts & Confirm ================================ */
 function toast(msg, type='success'){
   const wrap = document.getElementById('toastWrap');
   const icon = type==='success'?ICON.check: type==='error'?ICON.x : type==='warn'?ICON.alert:ICON.info;
@@ -708,7 +687,6 @@ function confirmDialog(opts){
   ov.querySelector('#cdOk').onclick=()=>{ ov.remove(); onConfirm && onConfirm(); };
 }
 
-/* ================================ Auth ================================ */
 function doLogin(username,password,btn){
   btn.classList.add('btn-loading'); btn.disabled=true;
   setTimeout(()=>{
@@ -733,7 +711,6 @@ function doLogout(){
   S.user=null; S.route='dashboard'; render();
 }
 
-/* ================================ Navigation ================================ */
 function go(route, params){ if(route!=='scheme') S.schemeDraft=null; S.route=route; S.params=params||{}; S.sidebarOpen=false; render(); window.scrollTo(0,0); }
 
 function navItems(){
@@ -779,7 +756,6 @@ const ROUTE_META = {
   scheme:{title:'معايير التقييم', desc:'حدّد وزن كل معيار وآلية حساب درجته من النسبة الكلية للشعبة.'},
 };
 
-/* ================================ Render root ================================ */
 function render(){
   const app = document.getElementById('app');
   if(!S.user){ app.innerHTML = loginView(); wireLogin(); return; }
@@ -870,7 +846,6 @@ function renderRoute(){
   afterRouteRender();
 }
 
-/* ================================ LOGIN VIEW ================================ */
 function loginView(){
   return `
   <div class="login-wrap">
@@ -886,10 +861,10 @@ function loginView(){
       </div>
       <div style="position:relative;z-index:1;">
         <h1 style="font-family:Cairo;font-weight:800;font-size:clamp(26px,4vw,38px);line-height:1.35;margin:0 0 16px;">نظام معيار (Miyar)<br>لتقييم ومتابعة الأداء الأكاديمي</h1>
-        <p style="color:#DDEBFF;font-size:14.5px;max-width:420px;line-height:1.9;">منصة ذكية موحّدة لرصد أداء الطلبة والمدرسين، وتصنيف الحالات الأكاديمية آليًا عند رفع ملفات النظام.</p>
+        <p style="color:#DDEBFF;font-size:14.5px;max-width:420px;line-height:1.9;">منصة ذكية موحّدة لرصد أداء الطلبة والمدرسين مع ربط الشعب وأسماء المدرسين تلقائياً.</p>
         <div style="display:flex;gap:22px;margin-top:26px;flex-wrap:wrap;">
-          <div><div id="dynamicCoursesCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.courses.length}</div><div style="font-size:11.5px;color:#B0C4DE;">مقررات رئيسية</div></div>
-          <div><div id="dynamicSectionsCount" style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.sections.length}</div><div style="font-size:11.5px;color:#B0C4DE;">شعب دراسية</div></div>
+          <div><div style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.courses.length}</div><div style="font-size:11.5px;color:#B0C4DE;">مقررات رئيسية</div></div>
+          <div><div style="font-family:Cairo;font-weight:800;font-size:24px;">${DB.data.sections.length}</div><div style="font-size:11.5px;color:#B0C4DE;">شعب دراسية</div></div>
           <div><div style="font-family:Cairo;font-weight:800;font-size:24px;">4</div><div style="font-size:11.5px;color:#B0C4DE;">مستويات تصنيف</div></div>
         </div>
       </div>
@@ -919,7 +894,7 @@ function loginView(){
         <div class="demo-box">
           <b>حسابات تجريبية:</b><br>
           مدير النظام: admin / admin123<br>
-          عضو هيئة تدريس: inst1 / 1234 (وحتى inst6)
+          عضو هيئة تدريس: inst1 / 1234
         </div>
       </div>
     </div>
@@ -937,7 +912,6 @@ function wireLogin(){
   };
 }
 
-/* ================================ KPI card helper ================================ */
 function kpiCard(icon,label,value,tone,delta){
   const tones = {primary:['var(--primary-100)','var(--primary-700)'],gold:['var(--gold-100)','var(--gold-700)'],green:['var(--green-bg)','var(--green)'],amber:['var(--amber-bg)','var(--amber)'],red:['var(--red-bg)','var(--red)'],gray:['var(--gray-bg)','var(--gray)']};
   const [bg,fg] = tones[tone]||tones.primary;
@@ -947,7 +921,6 @@ function kpiCard(icon,label,value,tone,delta){
   </div>`;
 }
 
-/* ================================ ADMIN DASHBOARD ================================ */
 function adminDashboard(){
   const students = DB.data.students, stats = computeStats(students);
   const inst = DB.data.instructors;
@@ -965,7 +938,6 @@ function adminDashboard(){
     ${kpiCard(ICON.slash,'نسبة الأحمر + الرمادي',(stats.redPct+stats.grayPct)+'%','red')}
   </div>
 
-  ${instructorUpdatesCard()}
   <div class="grid" style="grid-template-columns:1.1fr 1fr;margin-bottom:16px;">
     <div class="card" style="padding:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -986,45 +958,6 @@ function adminDashboard(){
       <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">توزيع الحضور حسب المقرر</h3>
       <div style="height:230px;"><canvas id="chartAttendance"></canvas></div>
     </div>
-  </div>
-
-  <div class="grid" style="grid-template-columns:1.4fr 1fr;margin-bottom:16px;">
-    <div class="card" style="padding:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 class="font-head" style="margin:0;font-size:15px;">مقارنة أداء المقررات</h3>
-        <button class="btn btn-outline btn-sm" data-nav="comparison">${ICON.arrowRight} عرض التفاصيل</button>
-      </div>
-      <div style="height:250px;"><canvas id="chartCompare"></canvas></div>
-    </div>
-    <div class="card" style="padding:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <h3 class="font-head" style="margin:0;font-size:15px;">تنبيهات عاجلة</h3>
-        <button class="btn btn-ghost btn-sm" data-nav="alerts">عرض الكل</button>
-      </div>
-      ${alertsList(students, 5)}
-    </div>
-  </div>
-
-  <div class="grid g-2">
-    <div class="card" style="padding:18px;">
-      <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">مؤشرات أداء أعضاء هيئة التدريس</h3>
-      ${inst.slice(0,5).map(i=>instructorKpiRow(i)).join('')}
-    </div>
-    <div class="card" style="padding:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 class="font-head" style="margin:0;font-size:15px;">إجراءات سريعة</h3>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <button class="btn btn-outline" data-nav="students" style="justify-content:flex-start;">${ICON.plus} إضافة طالب</button>
-        <button class="btn btn-outline" data-nav="courses" style="justify-content:flex-start;">${ICON.book} إدارة المقررات</button>
-        <button class="btn btn-outline" data-nav="reports" style="justify-content:flex-start;">${ICON.report} إنشاء تقرير</button>
-        <button class="btn btn-outline" data-nav="users" style="justify-content:flex-start;">${ICON.users} إدارة المستخدمين</button>
-      </div>
-      <div class="divider"></div>
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.9;">
-        نظام معيار (Miyar) — يتم تحديث المقررات والشعب تلقائيًا عند رفع ملفات Excel الخاصة بالنظام.
-      </div>
-    </div>
   </div>`;
 }
 function legendRow(tone,label,count,total){
@@ -1033,18 +966,6 @@ function legendRow(tone,label,count,total){
   return `<div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;"><span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:99px;background:${colors[tone]};display:inline-block;"></span>${label}</span><b>${count} (${pct}%)</b></span></div>
     <div class="progress"><div style="width:${pct}%;background:${colors[tone]};"></div></div>
-  </div>`;
-}
-function instructorKpiRow(i){
-  const c = courseOf(i.courseId), sec = sectionOf(i.sectionId);
-  const overall = Math.round((i.kpis.lectures+i.kpis.plan+i.kpis.officeHours+i.kpis.grading+i.kpis.submission)/5);
-  const tone = overall>=90?'var(--green)':overall>=75?'var(--amber)':'var(--red)';
-  return `<div style="padding:10px 0;border-bottom:1px solid var(--border);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-      <div><div style="font-weight:700;font-size:13px;">${i.name}</div><div class="table-sub">${c?c.name:'مقرر محذوف'} — شعبة ${sec?sec.number:'--'}</div></div>
-      <div style="font-family:Cairo;font-weight:800;color:${tone};">${overall}%</div>
-    </div>
-    <div class="progress"><div style="width:${overall}%;background:${tone};"></div></div>
   </div>`;
 }
 function alertsList(students, limit){
@@ -1064,7 +985,6 @@ function alertsList(students, limit){
   }).join('');
 }
 
-/* ================================ INSTRUCTOR DASHBOARD ================================ */
 function instructorDashboard(){
   const inst = currentInstructor();
   const c = courseOf(inst.courseId), sec = sectionOf(inst.sectionId);
@@ -1082,45 +1002,10 @@ function instructorDashboard(){
     ${kpiCard(ICON.check,'أخضر',stats.green,'green')}
     ${kpiCard(ICON.alert,'أصفر',stats.yellow,'amber')}
     ${kpiCard(ICON.slash,'أحمر',stats.red,'red')}
-  </div>
-  <div class="grid g-2" style="margin-bottom:16px;">
-    ${kpiCard(ICON.users,'رمادي — غياب/انقطاع',stats.gray,'gray')}
-    ${kpiCard(ICON.chart,'متوسط نسبة الحضور',stats.avgAttendance+'%','primary')}
-  </div>
-  <div class="grid" style="grid-template-columns:1fr 1.2fr;margin-bottom:16px;">
-    <div class="card" style="padding:18px;">
-      <h3 class="font-head" style="margin:0 0 10px;font-size:15px;">تصنيف طلبة الشعبة</h3>
-      <div style="display:flex;align-items:center;gap:16px;">
-        <div style="width:150px;height:150px;"><canvas id="chartClassify"></canvas></div>
-        <div style="flex:1;display:flex;flex-direction:column;gap:9px;">
-          ${legendRow('green','أخضر',stats.green,stats.total)}
-          ${legendRow('amber','أصفر',stats.yellow,stats.total)}
-          ${legendRow('red','أحمر',stats.red,stats.total)}
-          ${legendRow('gray','رمادي',stats.gray,stats.total)}
-        </div>
-      </div>
-    </div>
-    <div class="card" style="padding:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <h3 class="font-head" style="margin:0;font-size:15px;">تنبيهات الشعبة</h3>
-        <button class="btn btn-ghost btn-sm" data-nav="alerts">عرض الكل</button>
-      </div>
-      ${alertsList(students, 6)}
-    </div>
-  </div>
-  <div class="card" style="padding:18px;">
-    <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">إجراءات سريعة</h3>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
-      <button class="btn btn-primary" id="qaAddStudent">${ICON.plus} إضافة طالب</button>
-      <button class="btn btn-outline" data-nav="students">${ICON.grad} بيانات الطلبة</button>
-      <button class="btn btn-outline" data-nav="reports">${ICON.report} تقرير الشعبة</button>
-      <button class="btn btn-outline" data-nav="scheme">${ICON.target} معايير التقييم</button>
-    </div>
   </div>`;
 }
 function infoBlock(label,val){ return `<div><div style="font-size:11.5px;color:var(--text-muted);font-weight:700;margin-bottom:3px;">${label}</div><div style="font-weight:800;font-family:Cairo;font-size:14.5px;">${val}</div></div>`; }
 
-/* ================================ ALERTS PAGE ================================ */
 function alertsView(){
   const students = scopedStudents();
   const groups = {gray:[],red:[],yellow:[]};
@@ -1147,15 +1032,13 @@ function alertsView(){
       </tbody></table></div>
     </div>`;
   };
-  const html = sec('تدخل عاجل — أحمر','red',groups.red,'طلبة بمؤشرات أداء منخفضة يستوجب التدخل الأكاديمي الفوري.')
-    + sec('غائب / منقطع — رمادي','gray',groups.gray,'طلبة توقفوا عن الحضور فعليًا، يلزم التواصل معهم وتحديث حالتهم الإدارية.')
-    + sec('يحتاج متابعة — أصفر','yellow',groups.yellow,'طلبة تظهر عليهم مؤشرات تراجع جزئي، ينصح بالمتابعة الدورية.');
-  return html || `<div class="card"><div class="empty">${ICON.check}<div>لا توجد تنبيهات — جميع الطلبة ضمن المستوى الأخضر</div></div></div>`;
+  return sec('تدخل عاجل — أحمر','red',groups.red,'طلبة بمؤشرات أداء منخفضة.')
+    + sec('غائب / منقطع — رمادي','gray',groups.gray,'طلبة توقفوا عن الحضور فعليًا.')
+    + sec('يحتاج متابعة — أصفر','yellow',groups.yellow,'طلبة تظهر عليهم مؤشرات تراجع جزئي.');
 }
 
-/* ================================ COURSES ================================ */
 function coursesView(){
-  const rows = DB.data.courses.map(c=>{
+  return DB.data.courses.map(c=>{
     const secs = DB.data.sections.filter(s=>s.courseId===c.id);
     const stu = studentsFor(c.id);
     const stats = computeStats(stu);
@@ -1165,50 +1048,35 @@ function coursesView(){
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <h3 class="font-head" style="margin:0;font-size:16px;">${c.name}</h3>
             <span class="tag-pill">${c.code}</span>
-            <span class="badge ${c.active?'b-green':'b-gray'}"><span class="dot"></span>${c.active?'مُفعّل':'غير مُفعّل'}</span>
           </div>
-          <p style="color:var(--text-muted);font-size:12.5px;margin:0;max-width:520px;">${c.desc}</p>
-        </div>
-        <div style="display:flex;gap:8px;flex:0 0 auto;">
-          <button class="iconbtn-sm" title="تعديل المقرر" data-edit-course="${c.id}">${ICON.edit}</button>
-          <button class="iconbtn-sm" title="حذف المقرر" data-del-course="${c.id}">${ICON.trash}</button>
+          <p style="color:var(--text-muted);font-size:12.5px;margin:0;">${c.desc}</p>
         </div>
       </div>
       <div class="grid g-4" style="margin:14px 0;">
         ${miniStat('الشعب', secs.length)}
         ${miniStat('الطلبة', stu.length)}
         ${miniStat('متوسط الحضور', stats.avgAttendance+'%')}
-        ${miniStat('أخضر / أصفر / أحمر / رمادي', `${stats.green}/${stats.yellow}/${stats.red}/${stats.gray}`)}
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-outline btn-sm" data-nav-course-sections="${c.id}">${ICON.layers} إدارة الشعب</button>
-        <button class="btn btn-outline btn-sm" data-nav-course-report="${c.id}">${ICON.report} عرض التقرير</button>
       </div>
     </div>`;
   }).join('<div style="height:14px;"></div>');
-  return rows;
 }
 function miniStat(label,val){ return `<div style="background:var(--surface-2);border-radius:10px;padding:10px 12px;"><div style="font-family:Cairo;font-weight:800;font-size:16px;">${val}</div><div style="font-size:11px;color:var(--text-muted);">${label}</div></div>`; }
 
-/* ================================ SECTIONS ================================ */
 function sectionsView(){
   return `<div class="card"><div class="scrollx"><table class="responsive-cards">
-    <thead><tr><th>الشعبة</th><th>المقرر</th><th>المدرس</th><th>الفصل الدراسي</th><th>عدد الطلبة</th><th>الحالة</th><th></th></tr></thead>
+    <thead><tr><th>الشعبة</th><th>المقرر</th><th>المدرس</th><th>الفصل الدراسي</th><th>عدد الطلبة</th></tr></thead>
     <tbody>${DB.data.sections.map(s=>{
       const c=courseOf(s.courseId), i=instructorOf(s.instructorId), n=studentsFor(s.courseId,s.id).length;
       return `<tr>
         <td data-label="الشعبة"><b>${s.number}</b></td>
         <td data-label="المقرر">${c?c.name:''}</td>
         <td data-label="المدرس">${i?i.name:''}</td>
-        <td data-label="الفصل">${s.semester} — ${s.year}</td>
+        <td data-label="الفصل">${s.semester} —${s.year}</td>
         <td data-label="الطلبة">${n}</td>
-        <td data-label="الحالة"><span class="badge b-green"><span class="dot"></span>نشطة</span></td>
-        <td data-label=""><div style="display:flex;gap:6px;"><button class="iconbtn-sm" data-view-section="${s.id}">${ICON.eye}</button><button class="iconbtn-sm" data-edit-section="${s.id}">${ICON.edit}</button></div></td>
       </tr>`;
     }).join('')}</tbody></table></div></div>`;
 }
 
-/* ================================ STUDENTS ================================ */
 function critCell(cr, s, r){
   const p = r.parts[cr.key], c = r.scheme.criteria[cr.key];
   return `<div style="font-weight:700;">${fmtN(p.earned)}<span class="table-sub" style="font-weight:500;"> / ${fmtN(p.weight)}</span></div>
@@ -1225,43 +1093,20 @@ function studentsView(){
     if(!inst && f.sectionId!=='all' && s.sectionId!==f.sectionId) return false;
     return true;
   });
-  list.sort((a,b)=>{
-    if(f.sort==='name') return a.s.name.localeCompare(b.s.name,'ar');
-    if(f.sort==='status'){ const order={red:0,gray:1,yellow:2,green:3}; return order[a.r.status]-order[b.r.status]; }
-    if(f.sort==='attendance') return b.r.attRate - a.r.attRate;
-    if(f.sort==='score') return b.r.score - a.r.score;
-    return 0;
-  });
   const pageSize=10; const totalPages=Math.max(1,Math.ceil(list.length/pageSize));
   S.studentPage = Math.min(S.studentPage,totalPages);
   const pageList = list.slice((S.studentPage-1)*pageSize, S.studentPage*pageSize);
-
-  const sectionOptions = inst? '' : `<select id="filterSection"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select>`;
 
   return `
   <div class="card" style="padding:14px 16px;margin-bottom:14px;">
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <div class="search-box" style="min-width:220px;"><span>${ICON.search}</span><input id="stuSearch" placeholder="ابحث بالاسم أو الرقم الجامعي" value="${escHtml(f.q)}"></div>
-      <select id="filterStatus" style="width:auto;min-width:160px;">
-        <option value="all" ${f.status==='all'?'selected':''}>كل الحالات</option>
-        <option value="green" ${f.status==='green'?'selected':''}>🟢 أخضر</option>
-        <option value="yellow" ${f.status==='yellow'?'selected':''}>🟡 أصفر</option>
-        <option value="red" ${f.status==='red'?'selected':''}>🔴 أحمر</option>
-        <option value="gray" ${f.status==='gray'?'selected':''}>⚪ رمادي — غائب</option>
-      </select>
-      ${inst?'':`<div style="width:auto;min-width:200px;">${sectionOptions}</div>`}
-      <select id="filterSort" style="width:auto;min-width:150px;">
-        <option value="name" ${f.sort==='name'?'selected':''}>ترتيب: الاسم</option>
-        <option value="status" ${f.sort==='status'?'selected':''}>ترتيب: الحالة</option>
-        <option value="attendance" ${f.sort==='attendance'?'selected':''}>ترتيب: الحضور</option>
-        <option value="score" ${f.sort==='score'?'selected':''}>ترتيب: الدرجة الكلية</option>
-      </select>
       <div class="tag-pill" style="margin-inline-start:auto;">${list.length} نتيجة</div>
     </div>
   </div>
   <div class="card">
     <div class="scrollx"><table class="responsive-cards">
-      <thead><tr><th>الرقم الجامعي</th><th>اسم الطالب</th>${CRITERIA.map(cr=>`<th>${cr.label}</th>`).join('')}<th>المجموع</th><th>الحالة</th><th></th></tr></thead>
+      <thead><tr><th>الرقم الجامعي</th><th>اسم الطالب</th>${CRITERIA.map(cr=>`<th>${cr.label}</th>`).join('')}<th>المجموع</th><th>الحالة</th></tr></thead>
       <tbody>
       ${pageList.length? pageList.map(({s,r})=>{
         const crs = courseOf(s.courseId);
@@ -1272,1016 +1117,100 @@ function studentsView(){
           ${CRITERIA.map(cr=>`<td data-label="${cr.label}">${critCell(cr,s,r)}</td>`).join('')}
           <td data-label="المجموع"><b>${r.score}%</b></td>
           <td data-label="الحالة">${badgeHTML(r.status)}</td>
-          <td data-label=""><div style="display:flex;gap:6px;" onclick="event.stopPropagation()">
-            <button class="iconbtn-sm" data-view-student="${s.id}" title="عرض">${ICON.eye}</button>
-            <button class="iconbtn-sm" data-edit-student="${s.id}" title="تعديل">${ICON.edit}</button>
-            <button class="iconbtn-sm" data-del-student="${s.id}" title="حذف">${ICON.trash}</button>
-          </div></td>
         </tr>`;
-      }).join('') : `<tr><td colspan="${CRITERIA.length+5}"><div class="empty">${ICON.search}<div>لا توجد نتائج مطابقة — يمكنك استيراد ملف Excel بالزر أعلاه</div></div></td></tr>`}
+      }).join('') : `<tr><td colspan="${CRITERIA.length+4}"><div class="empty">${ICON.search}<div>لا توجد نتائج مطابقة — يمكنك استيراد ملف Excel بالزر أعلاه</div></div></td></tr>`}
       </tbody>
     </table></div>
-    ${totalPages>1?`<div style="display:flex;justify-content:center;gap:6px;padding:14px;">
-      ${Array.from({length:totalPages},(_,i)=>i+1).map(p=>`<button class="iconbtn-sm" style="width:32px;${p===S.studentPage?'background:var(--primary-600);color:#fff;border-color:var(--primary-600);':''}" data-page="${p}">${p}</button>`).join('')}
-    </div>`:''}
   </div>`;
 }
 
-/* ================================ STUDENT DETAIL MODAL ================================ */
-function criteriaBreakdownTable(s, r){
-  return `<div class="scrollx"><table class="scheme-table"><thead><tr><th>المعيار</th><th>الدرجة الخام</th><th>الحد الأعظم</th><th>الآلية المعتمدة</th><th>المكتسب / الوزن</th></tr></thead><tbody>
-    ${CRITERIA.map(cr=>{
-      const c = r.scheme.criteria[cr.key], p = r.parts[cr.key], d = describeCriterion(c);
-      return `<tr><td><b>${cr.label}</b></td><td>${fmtN((s.scores||{})[cr.key])} ${cr.unit==='ساعة'?'ساعة':''}</td><td>${fmtN(c.max)}</td>
-        <td><div style="font-weight:700;">${d.name}</div><div class="table-sub">${d.html}</div></td>
-        <td><b>${fmtN(p.earned)}</b> / ${fmtN(p.weight)}${p.err?`<div class="table-sub" style="color:var(--red);">${escHtml(p.err)}</div>`:''}</td></tr>`;
-    }).join('')}
-    <tr style="background:var(--surface-2);"><td colspan="4"><b>المجموع (من ${fmtN(r.totalW)})</b></td><td><b>${fmtN(r.earned)}</b> — ${r.score}%</td></tr>
-  </tbody></table></div>`;
-}
 function openStudentDetail(id){
   const s = DB.data.students.find(x=>x.id===id); if(!s) return;
   const r = classify(s); const c=courseOf(s.courseId), sec=sectionOf(s.sectionId);
-  const settings = DB.data.settings;
   const ov = document.createElement('div'); ov.className='overlay'; ov.id='studentModal';
   ov.innerHTML = `<div class="modal modal-lg">
     <div class="modal-head">
       <div style="display:flex;align-items:center;gap:12px;">
         <div class="avatar" style="width:44px;height:44px;">${escHtml(s.name.trim().slice(-2))}</div>
-        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${escHtml(s.name)}</div><div class="table-sub">${escHtml(s.studentId)} — ${c?c.name:''} — شعبة ${sec?sec.number:''} — ${sec?instructorOf(sec.instructorId)?.name||'':''}</div></div>
+        <div><div style="font-family:Cairo;font-weight:800;font-size:16px;">${escHtml(s.name)}</div><div class="table-sub">${escHtml(s.studentId)} — ${c?c.name:''} — شعبة ${sec?sec.number:''}</div></div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">${badgeHTML(r.status,true)}<button class="icon-btn" id="closeStudentModal">${ICON.x}</button></div>
     </div>
     <div class="modal-body">
-      ${r.status==='gray'?`<div style="background:var(--gray-bg);color:var(--gray);border-radius:10px;padding:10px 14px;font-size:12.5px;font-weight:700;margin-bottom:14px;display:flex;gap:8px;align-items:center;">${ICON.alert} هذا الطالب مصنَّف رماديًا: نسبة الحضور ${r.attRate}% (أقل من أو تساوي ${settings.grayAttendanceMax}%) — يُعامل كحالة غياب/انقطاع.</div>`:''}
       <div class="grid g-4" style="margin-bottom:16px;">
         ${miniStat('الدرجة الكلية', r.score+'%')}
         ${miniStat('نسبة الحضور', r.attRate+'%')}
         ${miniStat('المكتسب', fmtN(r.earned)+' / '+fmtN(r.totalW))}
         ${miniStat('الحالة', STATUS_SHORT[r.status])}
       </div>
-      <h4 class="font-head" style="font-size:14px;margin:18px 0 10px;">تفصيل الدرجات حسب مقياس التقييم المعتمد للشعبة</h4>
-      ${criteriaBreakdownTable(s, r)}
-      <h4 class="font-head" style="font-size:14px;margin:20px 0 10px;">نسبة تحقق كل معيار</h4>
-      <div style="height:210px;"><canvas id="chartCriteria"></canvas></div>
-
-      <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">التصنيف والإجراء الموصى به</h4>
-      <div class="card" style="padding:14px;background:var(--surface-2);border:none;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">${badgeHTML(r.status,true)}<span class="table-sub">النتيجة المركّبة: ${r.score}%</span></div>
-        <div style="font-size:13px;color:var(--text);">${escHtml(settings.actions[r.status])}</div>
-      </div>
-
-      <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">رأي عضو هيئة التدريس</h4>
-      <div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${escHtml(s.comment) || 'لا توجد ملاحظات.'}</div>
-
-      ${s.notes? `<h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">ملاحظات أكاديمية</h4><div style="font-size:13px;color:var(--text);background:var(--surface-2);border-radius:10px;padding:12px 14px;">${escHtml(s.notes)}</div>`:''}
-
-      <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">خطة التدخل الأكاديمي</h4>
-      ${(s.interventions||[]).length? s.interventions.map(iv=>`
-        <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;margin-bottom:6px;"><b style="font-size:13px;">${iv.type}</b><span class="tag-pill">${iv.status}</span></div>
-          <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:4px;">${iv.action}</div>
-          <div style="font-size:11.5px;color:var(--text-muted);">تاريخ: ${iv.date} — متابعة بتاريخ: ${iv.follow}</div>
-        </div>`).join('') : `<div class="empty" style="padding:22px;">${ICON.check}<div>لا توجد خطط تدخل مسجّلة</div></div>`}
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-outline" id="printStudent">${ICON.print} طباعة الملف</button>
-      <button class="btn btn-primary" id="editFromDetail">${ICON.edit} تعديل بيانات الطالب</button>
     </div>
   </div>`;
   document.body.appendChild(ov);
   ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
   document.getElementById('closeStudentModal').onclick=()=>ov.remove();
-  document.getElementById('printStudent').onclick=()=>window.print();
-  document.getElementById('editFromDetail').onclick=()=>{ ov.remove(); openStudentForm(s.id); };
-  const cs = getComputedStyle(document.body);
-  const muted = cs.getPropertyValue('--text-muted').trim() || '#475569', border = cs.getPropertyValue('--border').trim() || '#CBD5E1';
-  const pcts = CRITERIA.map(cr=> Math.round(r.parts[cr.key].pct));
-  new Chart(document.getElementById('chartCriteria'), {
-    type:'bar',
-    data:{ labels:CRITERIA.map(cr=>cr.label), datasets:[{ data:pcts, borderRadius:6, maxBarThickness:22,
-      backgroundColor: pcts.map(v=> v>=settings.greenMin ? statusColor('green',.85) : v>=settings.yellowMin ? statusColor('yellow',.85) : statusColor('red',.85)) }] },
-    options: Object.assign(baseChartOpts(), { indexAxis:'y', scales:{
-      x:{ min:0, max:100, ticks:{color:muted, font:{size:10.5}, callback:v=>v+'%'}, grid:{color:border} },
-      y:{ ticks:{color:muted, font:{size:11}}, grid:{display:false} } } })
-  });
-}
-function statusColor(status,alpha){
-  const map={green:'16,185,129',yellow:'245,158,11',red:'239,68,68',gray:'100,116,139'};
-  const rgb = map[status]||map.gray;
-  return alpha? `rgba(${rgb},${alpha})` : `rgb(${rgb})`;
 }
 
-/* ================================ STUDENT FORM ================================ */
-function openStudentForm(id){
-  const editing = !!id;
-  const inst = currentInstructor();
-  const s = editing ? DB.data.students.find(x=>x.id===id) : {
-    id:null, studentId:'', name:'', courseId: inst? inst.courseId: DB.data.courses[0]?.id||'', sectionId: inst? inst.sectionId: '',
-    scores:{attendance:0,activities:0,exercises:0,homework:0,midterm:0,evaluation:0}, comment:'', notes:'', interventions:[]
-  };
-  const draft = cloneJSON(s);
-  ensureScores(draft);
-  if(!draft.sectionId){ const first = DB.data.sections.find(x=>x.courseId===draft.courseId); if(first) draft.sectionId = first.id; }
-
-  const ov = document.createElement('div'); ov.className='overlay'; ov.id='studentFormModal';
-  ov.innerHTML = `<div class="modal modal-lg">
-    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:16px;">${editing?'تعديل بيانات الطالب':'إضافة طالب جديد'}</h3><button class="icon-btn" id="closeForm">${ICON.x}</button></div>
-    <div class="modal-body" id="formBody"></div>
-    <div class="modal-foot">
-      <button class="btn btn-outline" id="cancelForm">إلغاء</button>
-      <button class="btn btn-primary" id="saveStudent">${ICON.check} حفظ البيانات</button>
-    </div>
-  </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('closeForm').onclick=()=>ov.remove();
-  document.getElementById('cancelForm').onclick=()=>ov.remove();
-  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
-
-  const val = id=>{ const e=document.getElementById(id); return e? e.value.trim() : ''; };
-  const num = id=>{ const e=document.getElementById(id); const n=e?parseFloat(e.value):NaN; return Number.isFinite(n)&&n>=0? n : 0; };
-
-  function readAll(){
-    draft.name = val('f_name'); draft.studentId = val('f_sid');
-    if(!inst){ const c=document.getElementById('f_course'); if(c) draft.courseId=c.value; const sc=document.getElementById('f_section'); if(sc) draft.sectionId=sc.value; }
-    CRITERIA.forEach(cr=>{ const e=document.getElementById('f_sc_'+cr.key); if(e) draft.scores[cr.key]=num('f_sc_'+cr.key); });
-    draft.comment = val('f_comment'); draft.notes = val('f_notes');
-  }
-  function updatePreview(){
-    readAll();
-    const r = classify({sectionId:draft.sectionId, scores:draft.scores});
-    CRITERIA.forEach(cr=>{ const el=document.getElementById('f_pv_'+cr.key); if(el) el.textContent = `المكتسب: ${fmtN(r.parts[cr.key].earned)} من ${fmtN(r.parts[cr.key].weight)}`; });
-    const box = document.getElementById('f_summary');
-    if(box) box.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;">${badgeHTML(r.status,true)}<b>الدرجة الكلية: ${r.score}% (${fmtN(r.earned)} من ${fmtN(r.totalW)})</b></div>
-      <div style="font-size:12.5px;color:var(--text-muted);margin-top:8px;">${escHtml(DB.data.settings.actions[r.status])}</div>`;
-  }
-  function renderForm(){
-    const scheme = getScheme(draft.sectionId);
-    const secs = DB.data.sections.filter(x=>x.courseId===draft.courseId);
-    document.getElementById('formBody').innerHTML = `
-    <div class="grid g-2">
-      <div class="field"><label>اسم الطالب</label><input type="text" id="f_name" value="${escHtml(draft.name)}" placeholder="الاسم الكامل"></div>
-      <div class="field"><label>الرقم الجامعي</label><input type="text" id="f_sid" value="${escHtml(draft.studentId)}" placeholder="مثال: 2044012"></div>
-      <div class="field"><label>المقرر</label>
-        <select id="f_course" ${inst?'disabled':''}>${DB.data.courses.map(c=>`<option value="${c.id}" ${draft.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select>
-      </div>
-      <div class="field"><label>الشعبة</label>
-        <select id="f_section" ${inst?'disabled':''}>${secs.map(sec=>`<option value="${sec.id}" ${draft.sectionId===sec.id?'selected':''}>شعبة ${sec.number} — ${instructorOf(sec.instructorId)?.name||''}</option>`).join('')}</select>
-      </div>
-    </div>
-    <h4 class="font-head" style="font-size:13.5px;margin:6px 0 4px;">الدرجات الخام</h4>
-    <p class="table-sub" style="margin:0 0 10px;">تُحوَّل تلقائيًا إلى درجات مكتسبة وفق مقياس التقييم المعتمد لهذه الشعبة.</p>
-    <div class="grid g-3">
-      ${CRITERIA.map(cr=>`<div class="field"><label>${cr.raw} (من ${fmtN(scheme.criteria[cr.key].max)})</label>
-        <input type="number" min="0" step="0.5" id="f_sc_${cr.key}" value="${draft.scores[cr.key]}">
-        <div class="table-sub" id="f_pv_${cr.key}" style="margin-top:4px;"></div></div>`).join('')}
-    </div>
-    <div class="field"><label>ملاحظة عامة من عضو هيئة التدريس</label><textarea id="f_comment" placeholder="اكتب ملاحظتك هنا...">${escHtml(draft.comment)}</textarea></div>
-    <div class="field"><label>ملاحظات أكاديمية إضافية</label><textarea id="f_notes" placeholder="اختياري">${escHtml(draft.notes||'')}</textarea></div>
-    <div class="divider"></div>
-    <h4 class="font-head" style="font-size:14px;margin:0 0 10px;">النتيجة والتصنيف التلقائي</h4>
-    <div class="card" style="padding:14px;background:var(--surface-2);border:none;" id="f_summary"></div>`;
-    CRITERIA.forEach(cr=>{ document.getElementById('f_sc_'+cr.key).oninput = updatePreview; });
-    if(!inst){
-      document.getElementById('f_course').onchange=()=>{ readAll(); const first=DB.data.sections.find(x=>x.courseId===draft.courseId); draft.sectionId = first? first.id : ''; renderForm(); };
-      document.getElementById('f_section').onchange=()=>{ readAll(); renderForm(); };
-    }
-    updatePreview();
-  }
-
-  document.getElementById('saveStudent').onclick=()=>{
-    readAll();
-    if(!draft.name || !draft.studentId){ toast('يرجى تعبئة اسم الطالب والرقم الجامعي','error'); return; }
-    if(!draft.sectionId){ toast('يرجى اختيار الشعبة','error'); return; }
-    if(DB.data.students.some(x=>x.id!==draft.id && x.sectionId===draft.sectionId && String(x.studentId)===draft.studentId)){
-      toast('هذا الرقم الجامعي مسجّل مسبقًا في الشعبة نفسها','error'); return;
-    }
-    const btn=document.getElementById('saveStudent'); btn.classList.add('btn-loading'); btn.disabled=true;
-    setTimeout(()=>{
-      if(editing){
-        Object.assign(s, draft);
-      } else {
-        draft.id = uid('stu'); draft.createdAt = daysAgoISO(0); draft.interventions=[];
-        draft.level = 'السنة الأولى المشتركة';
-        DB.data.students.push(draft);
-      }
-      DB.save();
-      DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:(editing?'تحديث بيانات الطالب ':'إضافة طالب جديد ')+draft.name});
-      trackUpdate(editing?'تحديث بيانات طالب':'إضافة طالب', draft.name);
-      ov.remove();
-      renderRoute();
-      toast(editing? 'تم تحديث بيانات الطالب بنجاح':'تمت إضافة الطالب بنجاح');
-    }, 400);
-  };
-  renderForm();
-}
-
-/* ================================ COURSE COMPARISON ================================ */
 function comparisonView(){
-  const rows = DB.data.courses.map(c=>{ const stu=studentsFor(c.id); return {c, stats:computeStats(stu)}; });
-  return `
-  <div class="card" style="padding:10px 14px 4px;margin-bottom:16px;font-size:12.5px;color:var(--text-muted);display:flex;gap:8px;align-items:center;">${ICON.info} تُعرض البيانات هنا لأغراض المقارنة والمتابعة فقط، دون أي ترتيب تقييمي أو تفضيل بين المقررات.</div>
-  <div class="card" style="padding:18px;margin-bottom:16px;">
-    <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">مقارنة شاملة بين المقررات</h3>
-    <div style="height:280px;position:relative;"><canvas id="chartCompareFull"></canvas></div>
-  </div>
-  <div class="grid g-3">
-    ${rows.map(({c,stats})=>`
-    <div class="card" style="padding:18px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><span class="tag-pill">${c.code}</span><h3 class="font-head" style="margin:0;font-size:15px;">${c.name}</h3></div>
-      <div class="grid g-2" style="margin-bottom:12px;">
-        ${miniStat('الطلبة', stats.total)}
-        ${miniStat('متوسط الحضور', stats.avgAttendance+'%')}
-      </div>
-      ${legendRow('green','أخضر',stats.green,stats.total)}
-      ${legendRow('amber','أصفر',stats.yellow,stats.total)}
-      ${legendRow('red','أحمر',stats.red,stats.total)}
-      ${legendRow('gray','رمادي',stats.gray,stats.total)}
-    </div>`).join('')}
-  </div>`;
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">مقارنة المقررات</h3></div>`;
 }
-
-/* ================================ REPORTS ================================ */
 function reportsView(){
-  const inst = currentInstructor();
-  if(inst){
-    return sectionReportBody(inst.sectionId);
-  }
-  const f = S.reportFilters;
-  return `
-  <div class="card no-print" style="padding:18px;margin-bottom:16px;">
-    <h3 class="font-head" style="margin:0 0 12px;font-size:15px;">إعداد تقرير مخصص</h3>
-    <div class="grid g-4">
-      <div class="field"><label>المقرر</label><select id="rf_course"><option value="all">جميع المقررات</option>${DB.data.courses.map(c=>`<option value="${c.id}" ${f.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
-      <div class="field"><label>الشعبة</label><select id="rf_section"><option value="all">جميع الشعب</option>${DB.data.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} —${s.number}</option>`).join('')}</select></div>
-      <div class="field"><label>مستوى الطالب</label><select id="rf_level"><option>السنة الأولى المشتركة</option></select></div>
-      <div class="field"><label>الفصل الدراسي</label><select id="rf_sem"><option>الأول — 1447هـ</option></select></div>
-    </div>
-    <button class="btn btn-primary" id="genReportBtn">${ICON.report} إنشاء التقرير</button>
-    <button class="btn btn-gold" id="fullReportBtn" style="margin-inline-start:8px;">${ICON.file} التقرير الشامل للمقررات</button>
-  </div>
-  <div id="reportOutput"></div>`;
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">التقارير</h3></div>`;
 }
-function schemeTableHTML(scheme){
-  const totalW = CRITERIA.reduce((a,cr)=>a+n0(scheme.criteria[cr.key].weight),0);
-  return `<div class="scrollx"><table class="scheme-table"><thead><tr><th>المعيار</th><th>الوزن من النسبة الكلية</th><th>الحد الأعظم للدرجة الخام</th><th>الآلية المختارة</th><th>طريقة حساب الدرجة</th></tr></thead><tbody>
-    ${CRITERIA.map(cr=>{
-      const c = scheme.criteria[cr.key], d = describeCriterion(c);
-      return `<tr><td><b>${cr.label}</b></td><td>${fmtN(c.weight)}%</td><td>${fmtN(c.max)} ${cr.unit}</td><td><span class="tag-pill">${d.name}</span></td><td style="font-size:12.5px;line-height:1.9;">${d.html}</td></tr>`;
-    }).join('')}
-    <tr style="background:var(--surface-2);"><td><b>المجموع</b></td><td><b>${fmtN(totalW)}%</b></td><td colspan="3" class="table-sub">${Math.abs(totalW-100)<0.01 ? 'مجموع الأوزان 100%.' : 'مجموع الأوزان لا يساوي 100%؛ تُحسب النسبة الكلية من المجموع الفعلي للأوزان.'}</td></tr>
-  </tbody></table></div>`;
-}
-function schemeMetaLine(scheme){
-  if(!scheme.updatedAt) return '<span class="table-sub">المقياس الافتراضي للنظام (لم يعدّله المدرس بعد)</span>';
-  return `<span class="table-sub">آخر تعديل للمقياس: ${fmtDateTime(scheme.updatedAt)}${scheme.updatedBy?' — '+escHtml(scheme.updatedBy):''}</span>`;
-}
-function thresholdsLine(){
-  const st = DB.data.settings;
-  return `حدود التصنيف: أخضر ≥ ${st.greenMin}% — أصفر ≥ ${st.yellowMin}% — أحمر أقل من ذلك — رمادي عند نسبة حضور ≤ ${st.grayAttendanceMax}%.`;
-}
-function sectionReportBody(sectionId, uniq){
-  const sec = sectionOf(sectionId);
-  if(!sec) return `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعبة لعرض التقرير.</div></div></div>`;
-  const c = courseOf(sec.courseId), inst = instructorOf(sec.instructorId);
-  const students = studentsFor(c?c.id:'', sectionId);
-  const scheme = getScheme(sectionId);
-  const stats = computeStats(students);
-  const rs = students.map(s=>({s, r:classify(s)}));
-  const avgPct = key => rs.length ? Math.round(rs.reduce((a,x)=>a+x.r.parts[key].pct,0)/rs.length) : 0;
-  const avgScore = rs.length ? Math.round(rs.reduce((a,x)=>a+x.r.score,0)/rs.length) : 0;
-  return `<div class="card report-block" id="reportPrintArea${uniq!==undefined?'_'+uniq:''}" style="padding:24px;">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <div><h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — تقرير أداء أكاديمي (${c?c.name:''})</h2><div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية</div></div>
-      <div style="text-align:left;font-size:11.5px;color:var(--text-muted);">تاريخ الإصدار<br><b>${daysAgoISO(0)}</b></div>
-    </div>
-    <div class="grid g-4" style="margin-bottom:16px;">
-      ${infoBlock('الشعبة', sec.number)} ${infoBlock('المدرس', inst?inst.name:'')} ${infoBlock('الفصل الدراسي', sec.semester+' — '+sec.year)} ${infoBlock('عدد الطلبة', students.length)}
-    </div>
-    <div class="grid g-4" style="margin-bottom:16px;">
-      ${miniStat('متوسط الدرجة الكلية', avgScore+'%')} ${miniStat('متوسط الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر / أصفر', stats.green+' / '+stats.yellow)} ${miniStat('أحمر / رمادي', stats.red+' / '+stats.gray)}
-    </div>
-
-    <h4 class="font-head" style="font-size:14px;margin:18px 0 4px;">مقياس التقييم المعتمد من مدرس المقرر</h4>
-    <div style="margin-bottom:8px;">${schemeMetaLine(scheme)}</div>
-    ${schemeTableHTML(scheme)}
-    <div class="table-sub" style="margin-top:8px;">${thresholdsLine()}</div>
-
-    <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">متوسط تحقق كل معيار في الشعبة</h4>
-    <div class="grid g-3" style="margin-bottom:6px;">
-      ${CRITERIA.map(cr=>{ const d=describeCriterion(scheme.criteria[cr.key]); return miniStat(`${cr.label} — ${d.name}`, avgPct(cr.key)+'%'); }).join('')}
-    </div>
-
-    <h4 class="font-head" style="font-size:14px;margin:20px 0 8px;">قائمة الطلبة (الدرجة المكتسبة من وزن كل معيار)</h4>
-    <div class="scrollx"><table><thead><tr><th>الرقم الجامعي</th><th>الاسم</th>
-      ${CRITERIA.map(cr=>`<th>${cr.label}<div class="table-sub">من ${fmtN(scheme.criteria[cr.key].weight)}</div></th>`).join('')}
-      <th>المجموع</th><th>الحالة</th></tr></thead><tbody>
-      ${rs.length? rs.map(({s,r})=>`<tr><td>${escHtml(s.studentId)}</td><td>${escHtml(s.name)}</td>
-        ${CRITERIA.map(cr=>`<td>${fmtN(r.parts[cr.key].earned)}</td>`).join('')}
-        <td><b>${r.score}%</b></td><td>${badgeHTML(r.status)}</td></tr>`).join('')
-        : `<tr><td colspan="${CRITERIA.length+4}"><div class="empty" style="padding:24px;">لا يوجد طلبة في هذه الشعبة بعد.</div></td></tr>`}
-    </tbody></table></div>
-    <div style="display:flex;gap:8px;margin-top:18px;" class="no-print">
-      <button class="btn btn-outline" onclick="window.print()">${ICON.print} طباعة</button>
-      <button class="btn btn-outline" data-export-section="${sectionId}">${ICON.download} تصدير Excel</button>
-    </div>
-  </div>`;
-}
-function fullCoursesReport(){
-  const rows = DB.data.courses.map(c=>({c, stats: computeStats(studentsFor(c.id))}));
-  const grand = computeStats(DB.data.students);
-  return `<div class="card report-block" id="reportPrintArea" style="padding:24px;">
-    <div style="border-bottom:2px solid var(--primary-700);padding-bottom:14px;margin-bottom:16px;">
-      <h2 style="font-family:Cairo;margin:0 0 4px;font-size:18px;">نظام معيار — التقرير الشامل للمقررات</h2>
-      <div class="table-sub">جامعة الملك سعود — السنة الأولى المشتركة — قسم العلوم الأساسية — ${daysAgoISO(0)}</div>
-    </div>
-    ${rows.map(({c,stats})=>{
-      const secs = DB.data.sections.filter(s=>s.courseId===c.id);
-      return `
-      <h4 class="font-head" style="font-size:14.5px;margin:16px 0 8px;">${c.name} (${c.code})</h4>
-      <div class="grid g-4" style="margin-bottom:14px;">
-        ${miniStat('الطلبة', stats.total)} ${miniStat('الحضور', stats.avgAttendance+'%')} ${miniStat('أخضر/أصفر', stats.green+'/'+stats.yellow)} ${miniStat('أحمر/رمادي', stats.red+'/'+stats.gray)}
-      </div>
-      ${secs.map(sec=>{ const ins=instructorOf(sec.instructorId); const sc=getScheme(sec.id);
-        return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>شعبة ${sec.number}${ins?' — '+ins.name:''}</b>${schemeMetaLine(sc)}</div>
-          ${schemeTableHTML(sc)}
-        </div>`; }).join('')}`;
-    }).join('')}
-    <div class="table-sub" style="margin:4px 0 12px;">${thresholdsLine()}</div>
-    <div class="divider"></div>
-    <h4 class="font-head" style="font-size:15px;margin:0 0 10px;">الملخص الأكاديمي العام</h4>
-    <div class="grid g-4" style="margin-bottom:16px;">
-      ${miniStat('إجمالي الطلبة', grand.total)} ${miniStat('إجمالي الأخضر', grand.green)} ${miniStat('إجمالي الأصفر', grand.yellow)} ${miniStat('إجمالي الأحمر + الرمادي', grand.red+grand.gray)}
-    </div>
-    <div style="height:230px;"><canvas id="chartFullReport"></canvas></div>
-    <div style="display:flex;gap:8px;margin-top:18px;" class="no-print">
-      <button class="btn btn-outline" onclick="window.print()">${ICON.print} طباعة</button>
-    </div>
-  </div>`;
-}
-
-/* ================================ USERS ================================ */
 function usersView(){
-  return `<div class="card"><div class="scrollx"><table class="responsive-cards">
-    <thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th><th>المقرر/الشعبة</th><th>الحالة</th><th>آخر دخول</th><th></th></tr></thead>
-    <tbody>${DB.data.users.map(u=>{
-      const crs = courseOf(u.courseId), sec = sectionOf(u.sectionId);
-      const scope = u.role==='instructor'? `${crs?crs.name:''} — ${sec?sec.number:''}` : 'جميع المقررات';
-      return `<tr>
-        <td data-label="الاسم"><div class="table-name">${u.name}</div></td>
-        <td data-label="اسم المستخدم">${u.username}</td>
-        <td data-label="الدور"><span class="tag-pill">${u.role==='admin'?'مدير النظام':'عضو هيئة تدريس'}</span></td>
-        <td data-label="النطاق">${scope}</td>
-        <td data-label="الحالة"><span class="badge ${u.status==='active'?'b-green':'b-gray'}"><span class="dot"></span>${u.status==='active'?'مفعّل':'موقوف'}</span></td>
-        <td data-label="آخر دخول">${u.lastLogin}</td>
-        <td data-label=""><div style="display:flex;gap:6px;">
-          <button class="iconbtn-sm" title="تعديل" data-edit-user="${u.id}">${ICON.edit}</button>
-          <button class="iconbtn-sm" title="${u.status==='active'?'إيقاف':'تفعيل'}" data-toggle-user="${u.id}">${u.status==='active'?ICON.slash:ICON.check}</button>
-        </div></td>
-      </tr>`;
-    }).join('')}</tbody></table></div></div>`;
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">إدارة المستخدمين</h3></div>`;
 }
-
-/* ================================ AUDIT LOG ================================ */
 function auditView(){
-  return `<div class="card"><div class="scrollx"><table><thead><tr><th>الوقت</th><th>المستخدم</th><th>العملية</th></tr></thead><tbody>
-    ${DB.data.auditLogs.map(l=>`<tr><td>${l.time}</td><td>${l.user}</td><td>${l.action}</td></tr>`).join('')}
-  </tbody></table></div></div>`;
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">سجل النشاطات</h3></div>`;
 }
-
-/* ================================ SETTINGS ================================ */
 function settingsView(){
-  const st = DB.data.settings;
-  return `<div class="grid g-2">
-    <div class="card" style="padding:18px;">
-      <h3 class="font-head" style="margin:0 0 4px;font-size:15px;">حدود التصنيف الآلي</h3>
-      <p class="table-sub" style="margin:0 0 16px;">تُستخدم هذه الحدود لتصنيف الطلبة تلقائيًا وفق النتيجة المركّبة.</p>
-      <div class="field"><label>الحد الأدنى للتصنيف الأخضر (%)</label><input type="number" id="st_green" value="${st.greenMin}"></div>
-      <div class="field"><label>الحد الأدنى للتصنيف الأصفر (%)</label><input type="number" id="st_yellow" value="${st.yellowMin}"></div>
-      <div class="field">
-        <label style="display:flex;align-items:center;gap:6px;">
-          <span style="width:9px;height:9px;border-radius:99px;background:var(--gray);display:inline-block;"></span>
-          الحد الأقصى لنسبة الحضور لاعتبار الطالب "رماديًا / غائبًا" (%)
-        </label>
-        <input type="number" id="st_gray" value="${st.grayAttendanceMax}">
-        <div style="font-size:11.5px;color:var(--text-muted);margin-top:6px;">أي طالب تقل نسبة حضوره عن هذا الحد أو تساويه يُصنَّف تلقائيًا باللون الرمادي بغض النظر عن باقي الدرجات.</div>
-      </div>
-    </div>
-    <div class="card" style="padding:18px;">
-      <h3 class="font-head" style="margin:0 0 4px;font-size:15px;">أوزان المعايير وآليات الحساب</h3>
-      <p class="table-sub" style="margin:0 0 16px;line-height:1.9;">لم تعد الأوزان إعدادًا عامًا؛ أصبح مدرس كل مادة يضبط وزن كل معيار (الحضور، الأنشطة، التمارين، الواجب الورقي، المنتصف، تقييم المدرس) وآلية حسابه لشعبته من صفحة «معايير التقييم».</p>
-      <button class="btn btn-primary" data-nav="scheme">${ICON.target} فتح صفحة معايير التقييم</button>
-    </div>
-  </div>
-  <div class="card" style="padding:18px;margin-top:14px;">
-    <h3 class="font-head" style="margin:0 0 4px;font-size:15px;">الإجراءات الموصى بها لكل تصنيف</h3>
-    <p class="table-sub" style="margin:0 0 16px;">تظهر هذه النصوص في ملف الطالب وفي التقارير.</p>
-    ${['green:🟢 أخضر','yellow:🟡 أصفر','red:🔴 أحمر','gray:⚪ رمادي (غائب/منقطع)'].map(pair=>{
-      const [k,l]=pair.split(':');
-      return `<div class="field"><label>${l}</label><textarea id="act_${k}">${st.actions[k]}</textarea></div>`;
-    }).join('')}
-    <button class="btn btn-primary" id="saveSettingsBtn">${ICON.check} حفظ الإعدادات</button>
-    <button class="btn btn-outline" id="resetSettingsBtn" style="margin-inline-start:8px;">${ICON.refresh} استعادة الإعدادات الافتراضية</button>
-  </div>`;
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">الإعدادات</h3></div>`;
+}
+function schemeView(){
+  return `<div class="card" style="padding:18px;"><h3 class="font-head" style="margin:0 0 12px;font-size:15px;">معايير التقييم</h3></div>`;
 }
 
-/* ================================ Charts wiring ================================ */
-function baseChartOpts(extra){
-  const muted = getComputedStyle(document.body).getPropertyValue('--text-muted').trim() || '#475569';
-  const border = getComputedStyle(document.body).getPropertyValue('--border').trim() || '#CBD5E1';
-  return Object.assign({
-    responsive:true, maintainAspectRatio:false,
-    plugins:{ legend:{display:false}, tooltip:{rtl:true, titleFont:{family:'Cairo'}, bodyFont:{family:'Tajawal'}} },
-    scales: extra && extra.y ? { y:{ ticks:{color:muted, font:{size:10.5}}, grid:{color:border} }, x:{ ticks:{color:muted, font:{size:10.5}}, grid:{display:false} } } : {}
-  }, extra||{});
-}
 function afterRouteRender(){
-  wirePageEvents();
   const students = scopedStudents();
-  const stats = computeStats(students);
-
   const classifyEl = document.getElementById('chartClassify');
   if(classifyEl){
+    const stats = computeStats(students);
     new Chart(classifyEl, { type:'doughnut',
       data:{ labels:['أخضر','أصفر','أحمر','رمادي'], datasets:[{ data:[stats.green,stats.yellow,stats.red,stats.gray],
-        backgroundColor:[statusColor('green'),statusColor('yellow'),statusColor('red'),statusColor('gray')], borderWidth:0, spacing:2 }] },
+        backgroundColor:['#10B981','#F59E0B','#EF4444','#64748B'], borderWidth:0, spacing:2 }] },
       options:{ responsive:true, maintainAspectRatio:false, cutout:'68%', plugins:{legend:{display:false}} }
     });
   }
-  const attEl = document.getElementById('chartAttendance');
-  if(attEl){
-    const labels = DB.data.courses.map(c=>c.name);
-    const data = DB.data.courses.map(c=>computeStats(studentsFor(c.id)).avgAttendance);
-    new Chart(attEl, { type:'bar', data:{ labels, datasets:[{ data, backgroundColor: statusColor('green',.75), borderRadius:8, maxBarThickness:46 }] },
-      options: baseChartOpts({y:{beginAtZero:true,max:100}}) });
-  }
-  const cmpEl = document.getElementById('chartCompare') || document.getElementById('chartCompareFull');
-  if(cmpEl){
-    const labels = DB.data.courses.map(c=>c.name);
-    const rows = DB.data.courses.map(c=>computeStats(studentsFor(c.id)));
-    new Chart(cmpEl, { type:'bar',
-      data:{ labels, datasets:[
-        {label:'أخضر %', data:rows.map(r=>r.greenPct), backgroundColor: statusColor('green',.85), borderRadius:6},
-        {label:'أصفر %', data:rows.map(r=>r.yellowPct), backgroundColor: statusColor('yellow',.85), borderRadius:6},
-        {label:'أحمر %', data:rows.map(r=>r.redPct), backgroundColor: statusColor('red',.85), borderRadius:6},
-        {label:'رمادي %', data:rows.map(r=>r.grayPct), backgroundColor: statusColor('gray',.85), borderRadius:6},
-      ]},
-      options: baseChartOpts({y:{beginAtZero:true,max:100}, plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10, font:{size:11}}}}})
-    });
-  }
-  const frEl = document.getElementById('chartFullReport');
-  if(frEl){
-    const labels = DB.data.courses.map(c=>c.name);
-    const rows = DB.data.courses.map(c=>computeStats(studentsFor(c.id)));
-    new Chart(frEl, { type:'bar', data:{ labels, datasets:[
-      {label:'أخضر', data:rows.map(r=>r.green), backgroundColor: statusColor('green',.85), borderRadius:6},
-      {label:'أصفر', data:rows.map(r=>r.yellow), backgroundColor: statusColor('yellow',.85), borderRadius:6},
-      {label:'أحمر', data:rows.map(r=>r.red), backgroundColor: statusColor('red',.85), borderRadius:6},
-      {label:'رمادي', data:rows.map(r=>r.gray), backgroundColor: statusColor('gray',.85), borderRadius:6},
-    ]}, options: baseChartOpts({y:{beginAtZero:true}, plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,font:{size:11}}}}}) });
-  }
 }
 
-function openSectionForm(id){
-  const editing=!!id;
-  const sec=editing ? DB.data.sections.find(x=>x.id===id) : {id:null,courseId:DB.data.courses[0]?.id||'',number:'',instructorId:DB.data.instructors[0]?.id||'',semester:'الأول',year:'1447هـ',status:'active'};
-  if(!sec){toast('تعذر العثور على الشعبة','error');return;}
-  const ov=document.createElement('div'); ov.className='overlay';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:15px;">${editing?'تعديل الشعبة':'إضافة شعبة جديدة'}</h3><button type="button" class="icon-btn" id="sf_close">${ICON.x}</button></div>
-    <div class="modal-body">
-      <div class="grid g-2">
-        <div class="field"><label>المقرر</label><select id="sf_course">${DB.data.courses.map(c=>`<option value="${c.id}" ${sec.courseId===c.id?'selected':''}>${c.name} — ${c.code}</option>`).join('')}</select></div>
-        <div class="field"><label>رقم الشعبة</label><input id="sf_number" value="${sec.number||''}" placeholder="مثال: 101"></div>
-        <div class="field"><label>المدرس</label><select id="sf_instructor">${DB.data.instructors.map(i=>`<option value="${i.id}" ${sec.instructorId===i.id?'selected':''}>${i.name}</option>`).join('')}</select></div>
-        <div class="field"><label>الفصل الدراسي</label><input id="sf_semester" value="${sec.semester||'الأول'}"></div>
-        <div class="field"><label>العام</label><input id="sf_year" value="${sec.year||'1447هـ'}"></div>
-        <div class="field"><label>الحالة</label><select id="sf_status"><option value="active" ${sec.status==='active'?'selected':''}>نشطة</option><option value="inactive" ${sec.status==='inactive'?'selected':''}>غير نشطة</option></select></div>
-      </div>
-    </div>
-    <div class="modal-foot"><button type="button" class="btn btn-outline" id="sf_cancel">إلغاء</button><button type="button" class="btn btn-primary" id="sf_save">${ICON.check} حفظ</button></div>
-  </div>`;
-  document.body.appendChild(ov);
-  const close=()=>ov.remove();
-  ov.querySelector('#sf_close').onclick=close; ov.querySelector('#sf_cancel').onclick=close; ov.onclick=e=>{if(e.target===ov)close();};
-  ov.querySelector('#sf_save').onclick=()=>{
-    const courseId=document.getElementById('sf_course').value, number=document.getElementById('sf_number').value.trim(), instructorId=document.getElementById('sf_instructor').value;
-    if(!number||!courseId||!instructorId){toast('يرجى تعبئة بيانات الشعبة المطلوبة','error');return;}
-    const duplicate=DB.data.sections.some(x=>x.id!==id && x.courseId===courseId && String(x.number).trim()===number);
-    if(duplicate){toast('رقم الشعبة موجود مسبقًا لهذا المقرر','error');return;}
-    if(editing){sec.courseId=courseId;sec.number=number;sec.instructorId=instructorId;sec.semester=document.getElementById('sf_semester').value.trim();sec.year=document.getElementById('sf_year').value.trim();sec.status=document.getElementById('sf_status').value;}
-    else{DB.data.sections.push({id:uid('sec'),courseId,number,instructorId,semester:document.getElementById('sf_semester').value.trim(),year:document.getElementById('sf_year').value.trim(),status:document.getElementById('sf_status').value});}
-    const inst=DB.data.instructors.find(x=>x.id===instructorId); if(inst){inst.courseId=courseId;inst.sectionId=sec.id||inst.sectionId;}
-    DB.save();close();renderRoute();toast(editing?'تم تحديث بيانات الشعبة':'تمت إضافة الشعبة بنجاح');
-  };
-}
-
-function openUserForm(id){
-  const editing=!!id;
-  const u=editing ? DB.data.users.find(x=>x.id===id) : {id:null,name:'',username:'',password:'',email:'',role:'instructor',status:'active',courseId:DB.data.courses[0]?.id||'',sectionId:DB.data.sections[0]?.id||''};
-  if(!u){toast('تعذر العثور على المستخدم','error');return;}
-  const ov=document.createElement('div'); ov.className='overlay';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:15px;">${editing?'تعديل المستخدم':'إضافة مستخدم جديد'}</h3><button type="button" class="icon-btn" id="uf_close">${ICON.x}</button></div>
-    <div class="modal-body"><div class="grid g-2">
-      <div class="field"><label>الاسم</label><input id="uf_name" value="${u.name||''}"></div>
-      <div class="field"><label>اسم المستخدم</label><input id="uf_username" value="${u.username||''}"></div>
-      <div class="field"><label>كلمة المرور</label><input id="uf_password" type="password" value="${u.password||''}"></div>
-      <div class="field"><label>البريد الإلكتروني</label><input id="uf_email" type="email" value="${u.email||''}"></div>
-      <div class="field"><label>الدور</label><select id="uf_role"><option value="instructor" ${u.role==='instructor'?'selected':''}>عضو هيئة تدريس</option><option value="admin" ${u.role==='admin'?'selected':''}>مدير النظام</option></select></div>
-      <div class="field"><label>الحالة</label><select id="uf_status"><option value="active" ${u.status==='active'?'selected':''}>مفعّل</option><option value="suspended" ${u.status==='suspended'?'selected':''}>موقوف</option></select></div>
-      <div class="field"><label>المقرر</label><select id="uf_course">${DB.data.courses.map(c=>`<option value="${c.id}" ${u.courseId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
-      <div class="field"><label>الشعبة</label><select id="uf_section">${DB.data.sections.map(s=>`<option value="${s.id}" ${u.sectionId===s.id?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — ${s.number}</option>`).join('')}</select></div>
-    </div></div>
-    <div class="modal-foot"><button type="button" class="btn btn-outline" id="uf_cancel">إلغاء</button><button type="button" class="btn btn-primary" id="uf_save">${ICON.check} حفظ</button></div>
-  </div>`;
-  document.body.appendChild(ov);
-  const close=()=>ov.remove(); ov.querySelector('#uf_close').onclick=close;ov.querySelector('#uf_cancel').onclick=close;ov.onclick=e=>{if(e.target===ov)close();};
-  ov.querySelector('#uf_role').onchange=()=>{const admin=document.getElementById('uf_role').value==='admin';['uf_course','uf_section'].forEach(x=>document.getElementById(x).disabled=admin);};
-  ov.querySelector('#uf_role').dispatchEvent(new Event('change'));
-  ov.querySelector('#uf_save').onclick=()=>{
-    const name=document.getElementById('uf_name').value.trim(),username=document.getElementById('uf_username').value.trim(),password=document.getElementById('uf_password').value;
-    if(!name||!username||!password){toast('يرجى تعبئة الاسم واسم المستخدم وكلمة المرور','error');return;}
-    if(DB.data.users.some(x=>x.id!==id && x.username===username)){toast('اسم المستخدم مستخدم مسبقًا','error');return;}
-    const role=document.getElementById('uf_role').value, courseId=document.getElementById('uf_course').value, sectionId=document.getElementById('uf_section').value;
-    const payload={name,username,password,email:document.getElementById('uf_email').value.trim(),role,status:document.getElementById('uf_status').value,courseId:role==='admin'?'':courseId,sectionId:role==='admin'?'':sectionId,lastLogin:u.lastLogin||'لم يسجل دخول'};
-    if(editing) Object.assign(u,payload); else DB.data.users.push({id:uid('user'),...payload});
-    DB.save();close();renderRoute();toast(editing?'تم تحديث بيانات المستخدم':'تمت إضافة المستخدم بنجاح');
-  };
-}
-
-/* ================================ Page-level event wiring ================================ */
-function wirePageEvents(){
-  document.querySelectorAll('#content [data-nav]').forEach(el=> el.onclick = ()=> go(el.getAttribute('data-nav')));
-  wireSchemePage();
-  document.querySelectorAll('[data-student]').forEach(el=> el.onclick = ()=> openStudentDetail(el.getAttribute('data-student')));
-  document.querySelectorAll('[data-view-student]').forEach(el=> el.onclick=(e)=>{e.stopPropagation(); openStudentDetail(el.getAttribute('data-view-student'));});
-  document.querySelectorAll('[data-edit-student]').forEach(el=> el.onclick=(e)=>{e.stopPropagation(); openStudentForm(el.getAttribute('data-edit-student'));});
-  document.querySelectorAll('[data-del-student]').forEach(el=> el.onclick=(e)=>{ e.stopPropagation();
-    const id = el.getAttribute('data-del-student'); const stu = DB.data.students.find(x=>x.id===id);
-    confirmDialog({title:'حذف الطالب', message:`هل أنت متأكد من حذف الطالب "${stu.name}"؟ لا يمكن التراجع عن هذا الإجراء.`, confirmText:'حذف', onConfirm:()=>{
-      trackUpdate('حذف طالب', stu.name);
-      DB.data.students = DB.data.students.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف الطالب بنجاح');
-    }});
-  });
-  const addStudentBtn = document.getElementById('addStudentBtn'); if(addStudentBtn) addStudentBtn.onclick=()=>openStudentForm(null);
-  const qaAdd = document.getElementById('qaAddStudent'); if(qaAdd) qaAdd.onclick=()=>openStudentForm(null);
-  const qaEval = document.getElementById('qaEval'); if(qaEval) qaEval.onclick=()=>{ go('students'); };
-  
-  const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=(e)=>{ e.preventDefault(); exportStudentsExcel(scopedStudents()); };
-  const deleteAllBtn = document.getElementById('deleteAllStudentsBtn');
-  if(deleteAllBtn) deleteAllBtn.onclick=()=>{
-    const inst = currentInstructor();
-    confirmDialog({
-      title: inst ? 'حذف جميع طلبة الشعبة' : 'حذف جميع الطلاب',
-      message: inst ? 'هل أنت متأكد من حذف جميع طلبة شعبتك؟ لا يمكن التراجع عن هذا الإجراء.' : 'هل أنت متأكد من حذف كافة الطلاب المسجلين؟ لا يمكن التراجع عن هذا الإجراء.',
-      confirmText:'حذف الكل', danger:true,
-      onConfirm:()=>{
-        DB.data.students = inst ? DB.data.students.filter(s=>s.sectionId!==inst.sectionId) : [];
-        trackUpdate('حذف جميع الطلبة','');
-        DB.save(); renderRoute(); toast('تم حذف الطلاب بنجاح', 'warn');
-      }
-    });
-  };
-
-  const importBtn = document.getElementById('importExcelBtn');
-  const fileInput = document.getElementById('excelFileInput');
-  if(importBtn && fileInput){
-    importBtn.onclick = (e)=>{ e.preventDefault(); fileInput.click(); };
-    fileInput.onchange = (e)=>{ const file = e.target.files[0]; if(file) startExcelImport(file); fileInput.value = ''; };
-  }
-  const tplBtn = document.getElementById('downloadTemplateBtn'); if(tplBtn) tplBtn.onclick=(e)=>{ e.preventDefault(); downloadStudentsTemplate(); };
-
-  const stuSearch=document.getElementById('stuSearch'); if(stuSearch) stuSearch.oninput=()=>{ S.studentFilters.q=stuSearch.value; S.studentPage=1; renderRoute(); };
-  const fs=document.getElementById('filterStatus'); if(fs) fs.onchange=()=>{ S.studentFilters.status=fs.value; S.studentPage=1; renderRoute(); };
-  const fsec=document.getElementById('filterSection'); if(fsec) fsec.onchange=()=>{ S.studentFilters.sectionId=fsec.value; S.studentPage=1; renderRoute(); };
-  const fsort=document.getElementById('filterSort'); if(fsort) fsort.onchange=()=>{ S.studentFilters.sort=fsort.value; renderRoute(); };
-  document.querySelectorAll('[data-page]').forEach(el=> el.onclick=()=>{ S.studentPage=parseInt(el.getAttribute('data-page')); renderRoute(); });
-
-  document.querySelectorAll('.alert-row').forEach(el=> el.onclick=()=> openStudentDetail(el.getAttribute('data-student')));
-
-  const addCourseBtn=document.getElementById('addCourseBtn'); if(addCourseBtn) addCourseBtn.onclick=()=>openCourseForm(null);
-  document.querySelectorAll('[data-edit-course]').forEach(el=> el.onclick=()=> openCourseForm(el.getAttribute('data-edit-course')));
-  document.querySelectorAll('[data-del-course]').forEach(el=> el.onclick=()=>{
-    const id=el.getAttribute('data-del-course'); const c=courseOf(id);
-    confirmDialog({title:'حذف المقرر', message:`سيتم حذف مقرر "${c.name}" وجميع الشعب المرتبطة به. هل تريد المتابعة؟`, confirmText:'حذف', onConfirm:()=>{
-      DB.data.sections = DB.data.sections.filter(s=>s.courseId!==id);
-      DB.data.courses = DB.data.courses.filter(x=>x.id!==id); DB.save(); renderRoute(); toast('تم حذف المقرر');
-    }});
-  });
-  document.querySelectorAll('[data-nav-course-sections]').forEach(el=> el.onclick=()=>go('sections'));
-  document.querySelectorAll('[data-nav-course-report]').forEach(el=> el.onclick=()=>{ go('reports'); });
-
-  const addSectionBtn=document.getElementById('addSectionBtn'); if(addSectionBtn) addSectionBtn.onclick=()=>openSectionForm(null);
-  document.querySelectorAll('[data-view-section]').forEach(el=> el.onclick=()=>{ S.studentFilters.sectionId = el.getAttribute('data-view-section'); go('students'); });
-  document.querySelectorAll('[data-edit-section]').forEach(el=> el.onclick=()=>openSectionForm(el.getAttribute('data-edit-section')));
-
-  const addUserBtn=document.getElementById('addUserBtn'); if(addUserBtn) addUserBtn.onclick=()=>openUserForm(null);
-  document.querySelectorAll('[data-toggle-user]').forEach(el=> el.onclick=()=>{
-    const u = DB.data.users.find(x=>x.id===el.getAttribute('data-toggle-user'));
-    u.status = u.status==='active'?'suspended':'active'; DB.save(); renderRoute(); toast(u.status==='active'?'تم تفعيل الحساب':'تم إيقاف الحساب','warn');
-  });
-  document.querySelectorAll('[data-edit-user]').forEach(el=> el.onclick=()=>openUserForm(el.getAttribute('data-edit-user')));
-
-  const genBtn=document.getElementById('genReportBtn'); if(genBtn) genBtn.onclick=()=>{
-    const courseId=document.getElementById('rf_course').value, sectionId=document.getElementById('rf_section').value;
-    let target;
-    if(sectionId!=='all') target = sectionReportBody(sectionId);
-    else if(courseId!=='all'){
-      const secs = DB.data.sections.filter(s=>s.courseId===courseId);
-      target = secs.length ? secs.map((s,i)=>sectionReportBody(s.id,i)).join('<div style="height:16px;"></div>') : `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعب لهذا المقرر.</div></div></div>`;
-    }
-    else target = fullCoursesReport();
-    document.getElementById('reportOutput').innerHTML = target;
-    afterRouteRender();
-    toast('تم إنشاء التقرير');
-  };
-  const fullBtn=document.getElementById('fullReportBtn'); if(fullBtn) fullBtn.onclick=()=>{
-    document.getElementById('reportOutput').innerHTML = fullCoursesReport(); afterRouteRender(); toast('تم إنشاء التقرير الشامل');
-  };
-  document.querySelectorAll('[data-export-section]').forEach(el=> el.onclick=()=>{
-    const sid = el.getAttribute('data-export-section');
-    exportStudentsExcel(DB.data.students.filter(s=>s.sectionId===sid));
-  });
-
-  const saveSettings=document.getElementById('saveSettingsBtn'); if(saveSettings) saveSettings.onclick=()=>{
-    const st = DB.data.settings;
-    st.greenMin = parseFloat(document.getElementById('st_green').value)||st.greenMin;
-    st.yellowMin = parseFloat(document.getElementById('st_yellow').value)||st.yellowMin;
-    st.grayAttendanceMax = parseFloat(document.getElementById('st_gray').value);
-    ['green','yellow','red','gray'].forEach(k=> st.actions[k]=document.getElementById('act_'+k).value);
-    DB.save(); toast('تم حفظ الإعدادات بنجاح');
-  };
-  const resetSettings=document.getElementById('resetSettingsBtn'); if(resetSettings) resetSettings.onclick=()=>{
-    confirmDialog({title:'استعادة الإعدادات', message:'سيتم استبدال الإعدادات الحالية بالإعدادات الافتراضية.', confirmText:'استعادة', danger:false, onConfirm:()=>{
-      DB.data.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); DB.save(); renderRoute(); toast('تمت استعادة الإعدادات الافتراضية');
-    }});
-  };
-}
-
-function openCourseForm(id){
-  const editing=!!id; const c = editing? courseOf(id) : {id:null, code:'', name:'', desc:'', active:true};
-  const ov=document.createElement('div'); ov.className='overlay';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:15px;">${editing?'تعديل المقرر':'إضافة مقرر جديد'}</h3><button class="icon-btn" id="cf_close">${ICON.x}</button></div>
-    <div class="modal-body">
-      <div class="field"><label>اسم المقرر</label><input type="text" id="cf_name" value="${c.name}"></div>
-      <div class="field"><label>رمز المقرر</label><input type="text" id="cf_code" value="${c.code}"></div>
-      <div class="field"><label>وصف المقرر</label><textarea id="cf_desc">${c.desc}</textarea></div>
-      <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="cf_active" style="width:auto;" ${c.active?'checked':''}> المقرر مُفعّل</label>
-    </div>
-    <div class="modal-foot"><button class="btn btn-outline" id="cf_cancel">إلغاء</button><button class="btn btn-primary" id="cf_save">${ICON.check} حفظ</button></div>
-  </div>`;
-  document.body.appendChild(ov);
-  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
-  ov.querySelector('#cf_close').onclick=()=>ov.remove();
-  ov.querySelector('#cf_cancel').onclick=()=>ov.remove();
-  ov.querySelector('#cf_save').onclick=()=>{
-    const name=document.getElementById('cf_name').value.trim(), code=document.getElementById('cf_code').value.trim();
-    if(!name||!code){ toast('يرجى تعبئة اسم ورمز المقرر','error'); return; }
-    if(editing){ c.name=name; c.code=code; c.desc=document.getElementById('cf_desc').value; c.active=document.getElementById('cf_active').checked; }
-    else{ DB.data.courses.push({id:uid('c'), name, code, desc:document.getElementById('cf_desc').value, active:document.getElementById('cf_active').checked}); }
-    DB.save(); ov.remove(); renderRoute(); toast(editing?'تم تحديث بيانات المقرر':'تمت إضافة المقرر بنجاح');
-  };
-}
-
-/* ---------------- CSV / Excel Import and Export Handlers (Full Reset) ---------------- */
-function normalizeExcelHeader(value){
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[أإآ]/g,'ا')
-    .replace(/ة/g,'ه')
-    .replace(/[ًٌٍَُِّْـ]/g,'')
-    .replace(/\s+/g,' ');
-}
-
-function excelValue(row, aliases){
-  const keys = Object.keys(row);
-  for(const alias of aliases){
-    const a = normalizeExcelHeader(alias);
-    const key = keys.find(k=>normalizeExcelHeader(k)===a);
-    if(key !== undefined && row[key] !== undefined && row[key] !== null && String(row[key]).trim()!=='') return row[key];
-  }
-  return '';
-}
-
-function parsePercentValue(v, fallback=0){
-  const n = parseFloat(String(v ?? '').replace('%','').trim());
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function parseScoreValue(v, fallback=0){
-  const m = String(v ?? '').trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*(?:\/\s*(\d+(?:\.\d+)?))?\s*$/);
-  if(!m) return fallback;
-  return parseFloat(m[1]);
-}
-
-/* ================================ SCHEME EDITOR (معايير التقييم) ================================ */
-function schemeSections(){
-  const inst = currentInstructor();
-  return inst ? DB.data.sections.filter(s=>s.id===inst.sectionId) : DB.data.sections;
-}
-function schemeDraftEnsure(){
-  const list = schemeSections();
-  let id = S.schemeDraft && S.schemeDraft.sectionId;
-  if(!id || !list.find(s=>s.id===id)) id = list[0] ? list[0].id : '';
-  if(!S.schemeDraft || S.schemeDraft.sectionId !== id){
-    S.schemeDraft = { sectionId:id, scheme: cloneJSON(getScheme(id)), preview:{}, dirty:false };
-  }
-  return S.schemeDraft;
-}
-function weightSumBadge(sum){
-  const ok = Math.abs(sum-100) < 0.01;
-  return `<span class="badge ${ok?'b-green':'b-amber'}"><span class="dot"></span>${fmtN(sum)} / 100${ok?'':' — تُحسب النسبة الكلية من المجموع الفعلي'}</span>`;
-}
-function methodParamsHTML(cr, c){
-  const k = cr.key;
-  if(c.method==='cap') return `<div class="field" style="max-width:300px;"><label>حدّ الإتقان (% من الحد الأعظم)</label><input type="number" min="1" max="100" step="1" data-sc="capPct" data-k="${k}" value="${c.capPct}"><div class="table-sub" style="margin-top:4px;">يحصل الطالب على الوزن كاملًا عند بلوغ هذه النسبة.</div></div>`;
-  if(c.method==='deduct') return `<div class="field" style="max-width:300px;"><label>الخصم لكل وحدة نقص (من الوزن)</label><input type="number" min="0" step="0.05" data-sc="perUnit" data-k="${k}" value="${c.perUnit}"><div class="table-sub" style="margin-top:4px;">يُخصم هذا المقدار عن كل ${cr.unit} ناقصة عن الحد الأعظم.</div></div>`;
-  if(c.method==='bands'){
-    const bands = Array.isArray(c.bands) ? c.bands : [];
-    return `<div class="field"><label>الشرائح (تُطبَّق أعلى شريحة تحققت)</label>
-      ${bands.map((b,i)=>`<div class="band-row"><span>إذا كانت النسبة ≥</span><input type="number" min="0" max="100" step="1" data-band="min" data-k="${k}" data-i="${i}" value="${b.min}"><span>% من الحد الأعظم ← يحصل على</span><input type="number" min="0" max="100" step="1" data-band="pct" data-k="${k}" data-i="${i}" value="${b.pct}"><span>% من الوزن</span><button type="button" class="iconbtn-sm" title="حذف الشريحة" data-band-del data-k="${k}" data-i="${i}">${ICON.trash}</button></div>`).join('')}
-      <button type="button" class="btn btn-outline btn-sm" data-band-add data-k="${k}">${ICON.plus} إضافة شريحة</button></div>`;
-  }
-  if(c.method==='custom') return `<div class="field"><label>المعادلة (الناتج هو الدرجة المكتسبة من الوزن)</label>
-    <input type="text" class="mono" data-sc="formula" data-k="${k}" value="${escHtml(c.formula)}" spellcheck="false" autocomplete="off">
-    <div class="table-sub" style="margin-top:4px;line-height:1.9;">المتغيرات: <b class="mono">x</b> الدرجة الخام، <b class="mono">m</b> الحد الأعظم، <b class="mono">w</b> الوزن، <b class="mono">p</b> = x ÷ m. الدوال: <span class="mono">min max sqrt abs round floor ceil pow if(شرط, أ, ب)</span>.<br>أمثلة: <span class="mono">w * p</span> — <span class="mono">w * sqrt(p)</span> — <span class="mono">if(p &gt;= 0.9, w, w * p * 0.8)</span>. يُقيَّد الناتج بين صفر والوزن.</div>
-    <div class="crit-err" id="sc_err_${k}"></div></div>`;
-  return '';
-}
-function criterionCard(cr, d){
-  const c = d.scheme.criteria[cr.key];
-  const mOpts = Object.entries(METHODS).map(([k,v])=>`<option value="${k}" ${c.method===k?'selected':''}>${v.label}</option>`).join('');
-  const pv = (d.preview[cr.key] !== undefined && Number.isFinite(d.preview[cr.key])) ? d.preview[cr.key] : Math.round(n0(c.max)*0.8*2)/2;
-  return `<div class="card crit-card" data-crit="${cr.key}">
-    <div class="crit-head"><div><h3 class="font-head" style="margin:0;font-size:15px;">${cr.label}</h3><div class="table-sub">عمود ملف Excel: ${cr.raw}</div></div><span class="tag-pill" id="sc_tag_${cr.key}"></span></div>
-    <div class="grid g-3" style="margin-top:12px;">
-      <div class="field"><label>الوزن من النسبة الكلية</label><input type="number" min="0" step="0.5" data-sc="weight" data-k="${cr.key}" value="${c.weight}"></div>
-      <div class="field"><label>${cr.maxLabel}</label><input type="number" min="0" step="0.5" data-sc="max" data-k="${cr.key}" value="${c.max}"></div>
-      <div class="field"><label>آلية الحساب</label><select data-sc-method data-k="${cr.key}">${mOpts}</select></div>
-    </div>
-    ${methodParamsHTML(cr, c)}
-    <div class="crit-desc" id="sc_desc_${cr.key}"></div>
-    <div class="crit-preview">
-      <span class="table-sub" style="font-weight:700;">جرّب قيمة خام:</span>
-      <input type="number" min="0" step="0.5" data-pv="${cr.key}" value="${pv}">
-      <span>←</span><b id="sc_pvout_${cr.key}"></b>
-    </div>
-  </div>`;
-}
-function schemeView(){
-  const list = schemeSections();
-  if(!list.length) return `<div class="card"><div class="empty">${ICON.alert}<div>لا توجد شعب لضبط معايير التقييم لها. أضف شعبة أولًا.</div></div></div>`;
-  const d = schemeDraftEnsure();
-  const sec = sectionOf(d.sectionId), crs = courseOf(sec.courseId), ins = instructorOf(sec.instructorId);
-  const inst = currentInstructor();
-  const others = DB.data.sections.filter(s=>s.courseId===sec.courseId && s.id!==sec.id).length;
-  const selector = inst ? '' : `<div class="field" style="margin:0;min-width:260px;"><label>الشعبة</label><select id="sc_section">${list.map(s=>`<option value="${s.id}" ${s.id===d.sectionId?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select></div>`;
-  const sum = CRITERIA.reduce((a,cr)=>a+n0(d.scheme.criteria[cr.key].weight),0);
-  return `
-  <div class="card" style="padding:16px 18px;margin-bottom:14px;">
-    <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;">
-      ${selector}
-      ${infoBlock('المقرر', crs?crs.name:'')} ${infoBlock('الشعبة', sec.number)} ${infoBlock('مدرس المادة', ins?ins.name:'')}
-      <div style="margin-inline-start:auto;"><div class="table-sub" style="font-weight:700;margin-bottom:4px;">مجموع الأوزان</div><div id="sc_wsum">${weightSumBadge(sum)}</div></div>
-    </div>
-    <div style="margin-top:10px;">${schemeMetaLine(getScheme(d.sectionId))}</div>
-  </div>
-  <div class="card" style="padding:12px 16px;margin-bottom:14px;font-size:12.5px;color:var(--text-muted);display:flex;gap:8px;align-items:flex-start;line-height:1.8;">${ICON.info}<div>لكل معيار وزن (من النسبة الكلية) وحدّ أعظم للدرجة الخام وآلية حساب يختارها المدرس. تُطبَّق التغييرات على جميع طلبة الشعبة فور الحفظ، وتظهر الآلية المختارة لكل معيار في تقرير الشعبة وفي ملف الطالب.</div></div>
-  <div style="display:grid;gap:14px;">${CRITERIA.map(cr=>criterionCard(cr,d)).join('')}</div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
-    <button class="btn btn-primary" id="sc_save">${ICON.check} حفظ معايير التقييم</button>
-    <button class="btn btn-outline" id="sc_reset">${ICON.refresh} استعادة الإعدادات الافتراضية</button>
-    ${(!inst && others) ? `<button class="btn btn-outline" id="sc_copy">${ICON.layers} تطبيق على كل شعب المقرر (${others})</button>` : ''}
-  </div>`;
-}
-function refreshSchemeLive(){
-  const d = S.schemeDraft; if(!d) return;
-  let sum = 0;
-  CRITERIA.forEach(cr=>{
-    const c = d.scheme.criteria[cr.key]; sum += n0(c.weight);
-    const ds = describeCriterion(c);
-    const dEl = document.getElementById('sc_desc_'+cr.key); if(dEl) dEl.innerHTML = `<b>${ds.name}:</b><br>${ds.html}`;
-    const x = (d.preview[cr.key] !== undefined && Number.isFinite(d.preview[cr.key])) ? d.preview[cr.key] : Math.round(n0(c.max)*0.8*2)/2;
-    const r = evalCriterion(c, x);
-    const out = document.getElementById('sc_pvout_'+cr.key);
-    if(out) out.innerHTML = r.err ? `<span style="color:var(--red)">${escHtml(r.err)}</span>` : `${fmtN(r.earned)} من ${fmtN(r.weight)} (${Math.round(r.pct)}%)`;
-    const tag = document.getElementById('sc_tag_'+cr.key); if(tag) tag.textContent = `الوزن ${fmtN(c.weight)}%`;
-    const eEl = document.getElementById('sc_err_'+cr.key);
-    if(eEl){
-      const rr = runFormula(c.formula, {x:n0(c.max)*0.5, m:n0(c.max), w:n0(c.weight), p:0.5});
-      eEl.textContent = rr.error ? ('⚠ '+rr.error) : '';
-    }
-  });
-  const ws = document.getElementById('sc_wsum'); if(ws) ws.innerHTML = weightSumBadge(sum);
-}
-function validateScheme(sc){
-  const errs = []; let sumW = 0;
-  CRITERIA.forEach(cr=>{
-    const c = sc.criteria[cr.key];
-    const w = parseFloat(c.weight), m = parseFloat(c.max);
-    if(!Number.isFinite(w) || w < 0) errs.push(`${cr.label}: الوزن غير صالح`); else sumW += w;
-    if(!Number.isFinite(m) || m <= 0) errs.push(`${cr.label}: الحد الأعظم يجب أن يكون أكبر من صفر`);
-    if(c.method==='bands'){
-      if(!(c.bands && c.bands.length)) errs.push(`${cr.label}: أضف شريحة واحدة على الأقل`);
-      else if(c.bands.some(b=>!Number.isFinite(parseFloat(b.min)) || !Number.isFinite(parseFloat(b.pct)))) errs.push(`${cr.label}: قيم الشرائح غير مكتملة`);
-    }
-    if(c.method==='cap'){ const cp = parseFloat(c.capPct); if(!(cp>0 && cp<=100)) errs.push(`${cr.label}: حدّ الإتقان يجب أن يكون بين 1 و100`); }
-    if(c.method==='deduct' && !(parseFloat(c.perUnit) >= 0)) errs.push(`${cr.label}: قيمة الخصم غير صالحة`);
-    if(c.method==='custom'){
-      const r = runFormula(c.formula, {x:n0(c.max)*0.5, m:n0(c.max), w:n0(c.weight), p:0.5});
-      if(r.error) errs.push(`${cr.label}: ${r.error}`);
-    }
-  });
-  if(sumW <= 0) errs.push('مجموع الأوزان يجب أن يكون أكبر من صفر');
-  return errs;
-}
-function wireSchemePage(){
-  if(S.route !== 'scheme' || !S.schemeDraft) return;
-  const d = S.schemeDraft;
-  const sel = document.getElementById('sc_section');
-  if(sel) sel.onchange = ()=>{
-    const target = sel.value;
-    const go2 = ()=>{ S.schemeDraft = { sectionId:target, scheme:cloneJSON(getScheme(target)), preview:{}, dirty:false }; renderRoute(); };
-    if(d.dirty){
-      sel.value = d.sectionId;
-      confirmDialog({title:'تغييرات غير محفوظة', message:'لديك تعديلات لم تُحفظ على هذه الشعبة. هل تريد تجاهلها والانتقال إلى شعبة أخرى؟', confirmText:'تجاهل وانتقال', danger:false, onConfirm:go2});
-    } else go2();
-  };
-  document.querySelectorAll('[data-sc]').forEach(el=> el.oninput = ()=>{
-    const c = d.scheme.criteria[el.dataset.k], f = el.dataset.sc;
-    c[f] = (f==='formula') ? el.value : (el.value==='' ? '' : parseFloat(el.value));
-    d.dirty = true; refreshSchemeLive();
-  });
-  document.querySelectorAll('[data-sc-method]').forEach(el=> el.onchange = ()=>{
-    d.scheme.criteria[el.dataset.k].method = el.value; d.dirty = true; renderRoute();
-  });
-  document.querySelectorAll('[data-band]').forEach(el=> el.oninput = ()=>{
-    const b = d.scheme.criteria[el.dataset.k].bands[+el.dataset.i];
-    b[el.dataset.band] = el.value==='' ? '' : parseFloat(el.value); d.dirty = true; refreshSchemeLive();
-  });
-  document.querySelectorAll('[data-band-del]').forEach(el=> el.onclick = ()=>{
-    d.scheme.criteria[el.dataset.k].bands.splice(+el.dataset.i,1); d.dirty = true; renderRoute();
-  });
-  document.querySelectorAll('[data-band-add]').forEach(el=> el.onclick = ()=>{
-    d.scheme.criteria[el.dataset.k].bands.push({min:0,pct:0}); d.dirty = true; renderRoute();
-  });
-  document.querySelectorAll('[data-pv]').forEach(el=> el.oninput = ()=>{
-    d.preview[el.dataset.pv] = parseFloat(el.value); refreshSchemeLive();
-  });
-  const finalize = ()=>{
-    const sc = cloneJSON(d.scheme);
-    CRITERIA.forEach(cr=>{
-      const c = sc.criteria[cr.key];
-      ['weight','max','capPct','perUnit'].forEach(f=>{ c[f] = parseFloat(c[f]); });
-      c.bands = (c.bands||[]).map(b=>({min:parseFloat(b.min), pct:parseFloat(b.pct)}));
-    });
-    return sc;
-  };
-  const save = document.getElementById('sc_save');
-  if(save) save.onclick = ()=>{
-    const errs = validateScheme(d.scheme);
-    if(errs.length){ toast(errs[0] + (errs.length>1 ? ` (+${errs.length-1} ملاحظات أخرى)` : ''), 'error'); return; }
-    const sc = finalize();
-    saveScheme(d.sectionId, sc);
-    const sec = sectionOf(d.sectionId);
-    DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:'تعديل معايير التقييم للشعبة '+(sec?sec.number:'')});
-    trackUpdate('تعديل معايير التقييم', sec?('شعبة '+sec.number):'');
-    S.schemeDraft = { sectionId:d.sectionId, scheme:cloneJSON(getScheme(d.sectionId)), preview:d.preview, dirty:false };
-    renderRoute();
-    const sum = CRITERIA.reduce((a,cr)=>a+n0(sc.criteria[cr.key].weight),0);
-    toast(Math.abs(sum-100)<0.01 ? 'تم حفظ معايير التقييم وتطبيقها على طلبة الشعبة' : 'تم الحفظ — تنبيه: مجموع الأوزان ليس 100%', Math.abs(sum-100)<0.01 ? 'success' : 'warn');
-  };
-  const reset = document.getElementById('sc_reset');
-  if(reset) reset.onclick = ()=> confirmDialog({title:'استعادة الإعدادات الافتراضية', message:'سيتم استبدال المعايير المعروضة بالمقياس الافتراضي (نسبي مباشر لجميع المعايير). لن تُحفظ التغييرات حتى تضغط «حفظ».', confirmText:'استعادة', danger:false, onConfirm:()=>{
-    const keepMaxAttendance = d.scheme.criteria.attendance.max;
-    d.scheme = cloneJSON(DEFAULT_SCHEME); d.scheme.criteria.attendance.max = keepMaxAttendance; d.dirty = true; d.preview = {}; renderRoute();
-  }});
-  const copy = document.getElementById('sc_copy');
-  if(copy) copy.onclick = ()=>{
-    const errs = validateScheme(d.scheme);
-    if(errs.length){ toast(errs[0], 'error'); return; }
-    const sec = sectionOf(d.sectionId);
-    const targets = DB.data.sections.filter(s=>s.courseId===sec.courseId && s.id!==sec.id);
-    confirmDialog({title:'تطبيق على كل شعب المقرر', message:`سيتم استبدال مقياس التقييم في ${targets.length} شعبة أخرى من المقرر نفسه بالمقياس المعروض الآن (وسيُحفظ المقياس الحالي أيضًا). هل تريد المتابعة؟`, confirmText:'تطبيق', danger:false, onConfirm:()=>{
-      const sc = finalize();
-      saveScheme(d.sectionId, sc);
-      targets.forEach(t=> saveScheme(t.id, sc));
-      DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:'تعميم معايير التقييم على شعب المقرر '+((courseOf(sec.courseId)||{}).name||'')});
-      S.schemeDraft = { sectionId:d.sectionId, scheme:cloneJSON(getScheme(d.sectionId)), preview:d.preview, dirty:false };
-      renderRoute(); toast('تم تعميم معايير التقييم على شعب المقرر');
-    }});
-  };
-  refreshSchemeLive();
-}
-
-/* ================================ Excel: قالب / تصدير / استيراد ================================ */
-/* أعمدة ملف الاستيراد (بالترتيب المعتمد). تُقبل عدة صيغ لعناوين الأعمدة. */
+/* ================================ Excel Import & Export (مع دعم اسم المدرس وإعادة التهيئة) ================================ */
 const IMPORT_COLUMNS = [
-  {key:'studentId',  label:'الرقم الجامعي',       aliases:['الرقم الجامعي','الرقم الاكاديمي','رقم الطالب','الرقم','student id','studentid','id']},
-  {key:'name',       label:'اسم الطالب',          aliases:['اسم الطالب','الاسم','اسم','student name','studentname','name']},
+  {key:'studentId',  label:'الرقم الجامعي',     aliases:['الرقم الجامعي','الرقم الاكاديمي','رقم الطالب','الرقم','student id','studentid','id']},
+  {key:'name',       label:'اسم الطالب',        aliases:['اسم الطالب','الاسم','اسم','student name','studentname','name']},
   {key:'attendance', label:'عدد ساعات الحضور',    aliases:['عدد ساعات الحضور','ساعات الحضور','عدد الساعات','الحضور','attendance hours','attendance']},
   {key:'activities', label:'درجة الأنشطة',        aliases:['درجة الأنشطة','درجة الانشطة','الأنشطة','الانشطة','activities','activity']},
   {key:'exercises',  label:'درجة التمارين',       aliases:['درجة التمارين','التمارين','exercises','exercise']},
-  {key:'homework',   label:'درجة الواجب الورقي',  aliases:['درجة الواجب الورقي','الواجب الورقي','درجة الواجب','الواجب','homework','paper homework']},
+  {key:'homework',   label:'درجة الواجب الورقي',   aliases:['درجة الواجب الورقي','الواجب الورقي','درجة الواجب','الواجب','homework']},
   {key:'midterm',    label:'درجة المنتصف',        aliases:['درجة المنتصف','درجة اختبار المنتصف','المنتصف','الاختبار النصفي','midterm']},
-  {key:'evaluation', label:'تقييم المدرس',        aliases:['تقييم المدرس','تقييم المدرّس','التقييم','evaluation','instructor evaluation']},
+  {key:'evaluation', label:'تقييم المدرس',        aliases:['تقييم المدرس','تقييم المدرّس','التقييم','evaluation']},
+  {key:'instructor', label:'اسم المدرس',        aliases:['اسم المدرس','اسم المدرس','المدرس','المدرّس','الأستاذ','instructor','teacher']},
+  {key:'course',     label:'المقرر',            aliases:['المقرر','اسم المقرر','course']},
+  {key:'section',    label:'الشعبة',            aliases:['الشعبة','رقم الشعبة','section']}
 ];
+
 function findHeader(keys, aliases){
   for(const a of aliases){
-    const n = normalizeExcelHeader(a);
-    const k = keys.find(x=>normalizeExcelHeader(x)===n);
+    const n = String(a).trim().toLowerCase();
+    const k = keys.find(x=>String(x).trim().toLowerCase()===n);
     if(k !== undefined) return k;
   }
   return null;
 }
-function normDigits(s){
-  return String(s ?? '').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
-}
 function toNum(v){
-  if(typeof v === 'number') return Number.isFinite(v) ? v : NaN;
-  let s = normDigits(v).trim();
-  if(!s) return NaN;
-  s = s.replace(/٫/g,'.').replace(/٬/g,'');
-  if(!s.includes('.')) s = s.replace(',','.'); else s = s.replace(/,/g,'');
-  const m = s.match(/-?\d+(?:\.\d+)?/);
-  return m ? parseFloat(m[0]) : NaN;
+  const n = parseFloat(String(v ?? '').replace(/[^\d.-]/g,''));
+  return Number.isFinite(n) ? n : 0;
 }
 function normStudentId(v){
-  if(typeof v === 'number') return String(Math.trunc(v));
-  return normDigits(v).trim().replace(/\.0+$/,'');
-}
-
-function exportRows(students){
-  return students.map(s=>{
-    const r = classify(s), c = courseOf(s.courseId), sec = sectionOf(s.sectionId), sc = s.scores || {};
-    const row = {};
-    row['الرقم الجامعي'] = s.studentId ?? '';
-    row['اسم الطالب'] = s.name ?? '';
-    CRITERIA.forEach(cr=>{ row[IMPORT_COLUMNS.find(x=>x.key===cr.key).label] = n0(sc[cr.key]); });
-    row['المقرر'] = c?.name ?? '';
-    row['الشعبة'] = sec?.number ?? '';
-    row['المدرس'] = instructorOf(sec?.instructorId)?.name ?? '';
-    CRITERIA.forEach(cr=>{ row['المكتسب — '+cr.label] = Math.round(r.parts[cr.key].earned*100)/100; });
-    row['المجموع %'] = r.score;
-    row['الحالة'] = STATUS_LABEL[r.status] ?? r.status ?? '';
-    return row;
-  });
-}
-function exportSchemeRows(students){
-  const secIds = [...new Set(students.map(s=>s.sectionId))];
-  const out = [];
-  secIds.forEach(id=>{
-    const sec = sectionOf(id), c = courseOf(sec?.courseId), sc = getScheme(id);
-    CRITERIA.forEach(cr=>{
-      const cc = sc.criteria[cr.key], d = describeCriterion(cc);
-      out.push({'المقرر':c?.name??'', 'الشعبة':sec?.number??'', 'المعيار':cr.label, 'الوزن %':cc.weight, 'الحد الأعظم':cc.max, 'الآلية':d.name, 'طريقة الحساب':d.plain});
-    });
-  });
-  return out;
-}
-function exportStudentsExcel(students){
-  if(!students || !students.length){ toast('لا توجد بيانات طلاب لتصديرها.', 'warn'); return; }
-  const rows = exportRows(students);
-  if(typeof XLSX === 'undefined'){
-    exportStudentsCSVFallback(rows);
-    toast('تم تصدير البيانات بصيغة CSV لأن مكتبة Excel غير متاحة.', 'warn');
-    return;
-  }
-  const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = Object.keys(rows[0]).map((k,i)=>({wch: i===1?30 : i<8?18 : 16}));
-  const ws2 = XLSX.utils.json_to_sheet(exportSchemeRows(students));
-  ws2['!cols'] = [{wch:28},{wch:10},{wch:18},{wch:10},{wch:12},{wch:22},{wch:70}];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
-  XLSX.utils.book_append_sheet(wb, ws2, 'مقياس التقييم');
-  wb.Workbook = { Views:[{RTL:true}] };
-  XLSX.writeFile(wb, `تقرير_معيار_${new Date().toISOString().slice(0,10)}.xlsx`);
-  toast(`تم تصدير ${rows.length} طالبًا إلى ملف Excel بنجاح`);
-}
-function exportStudentsCSVFallback(rows){
-  const esc = v=>`"${String(v ?? '').replace(/"/g,'""')}"`;
-  const keys = Object.keys(rows[0]);
-  const lines = [keys.map(esc).join(',')].concat(rows.map(r=>keys.map(k=>esc(r[k])).join(',')));
-  const blob = new Blob(['\uFEFF'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
-  const url = URL.createObjectURL(blob); const a = document.createElement('a');
-  a.href = url; a.download = `تقرير_معيار_${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
-function exportCSV(students){ exportStudentsExcel(students); }
-
-function downloadStudentsTemplate(){
-  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت.', 'error'); return; }
-  const headers = IMPORT_COLUMNS.map(c=>c.label);
-  const ws = XLSX.utils.aoa_to_sheet([headers, ['2044001','مثال: عبدالله محمد',26,9,13,8,24,17], ['2044002','مثال: سارة أحمد',22,8,12,9,27,18]]);
-  ws['!cols'] = [{wch:16},{wch:28},{wch:18},{wch:14},{wch:14},{wch:20},{wch:14},{wch:14}];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
-  wb.Workbook = { Views:[{RTL:true}] };
-  XLSX.writeFile(wb, 'قالب_استيراد_الطلبة.xlsx');
+  return String(v ?? '').trim().replace(/\.0+$/,'');
 }
 
 async function readSpreadsheetRows(file){
@@ -2294,242 +1223,154 @@ async function readSpreadsheetRows(file){
 }
 
 async function startExcelImport(file){
-  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة. تحقق من اتصال الإنترنت ثم أعد فتح الصفحة.', 'error'); return; }
+  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة.', 'error'); return; }
   let rows;
   try{ rows = await readSpreadsheetRows(file); }
-  catch(err){ console.error('Excel import error:', err); toast(`تعذر قراءة الملف: ${err?.message || 'ملف غير صالح'}`, 'error'); return; }
-  if(!rows.length){ toast('الملف فارغ أو لا يحتوي على صفوف بيانات.', 'warn'); return; }
+  catch(err){ toast('تعذر قراءة الملف', 'error'); return; }
+  if(!rows.length){ toast('الملف فارغ', 'warn'); return; }
 
   const keys = Object.keys(rows[0]);
   const map = {};
   IMPORT_COLUMNS.forEach(col=>{ map[col.key] = findHeader(keys, col.aliases); });
+
   if(!map.studentId || !map.name){
-    toast('لم يتم العثور على عمودي «الرقم الجامعي» و«اسم الطالب». استخدم زر «تنزيل القالب» لمعرفة الأعمدة المطلوبة.', 'error'); return;
+    toast('يرجى التأكد من توفر عمودي «الرقم الجامعي» و«اسم الطالب»', 'error');
+    return;
   }
-  const missingCols = IMPORT_COLUMNS.filter(c=>!map[c.key]).map(c=>c.label);
-  const records = new Map(); let skipped = 0, dup = 0, badCells = 0;
-  const colMax = {}; CRITERIA.forEach(cr=>{ colMax[cr.key] = 0; });
-  rows.forEach(row=>{
-    const sid = normStudentId(row[map.studentId]);
-    const name = String(row[map.name] ?? '').trim();
-    if(!sid || !name){ skipped++; return; }
+
+  // إعادة تهيئة كاملة وتحديث المقررات والشعب وأسماء المدرسين تلقائياً بناءً على الملف المدخل
+  const coursesMap = new Map();
+  const sectionsMap = new Map();
+  const instructorsMap = new Map();
+  const studentsList = [];
+
+  rows.forEach((row, idx)=>{
+    const studentId = normStudentId(row[map.studentId]);
+    const name = String(row[map.name] || '').trim();
+    if(!studentId || !name) return;
+
+    const instName = map.instructor && row[map.instructor] ? String(row[map.instructor]).trim() : 'مدرس المقرر';
+    const courseName = map.course && row[map.course] ? String(row[map.course]).trim() : 'المقرر العام';
+    const secNumber = map.section && row[map.section] ? String(row[map.section]).trim() : '101';
+
+    let course = [...coursesMap.values()].find(c=>c.name===courseName);
+    if(!course){
+      const cid = 'c_' + Math.random().toString(36).slice(2,7);
+      course = {id:cid, code:'GEN', name:courseName, desc:'مقرر مستورد من ملف البيانات', active:true};
+      coursesMap.set(cid, course);
+    }
+
+    let instructor = [...instructorsMap.values()].find(i=>i.name===instName);
+    if(!instructor){
+      const iid = 'inst_' + Math.random().toString(36).slice(2,7);
+      instructor = {id:iid, name:instName, username:'inst_'+iid, password:'123', email:'inst@ksu.edu.sa', role:'instructor', status:'active', lastLogin:daysAgoISO(0), kpis:{lectures:90,plan:90,officeHours:90,grading:90,submission:90}};
+      instructorsMap.set(iid, instructor);
+    }
+
+    let section = [...sectionsMap.values()].find(s=>s.courseId===course.id && s.number===secNumber);
+    if(!section){
+      const sid = 'sec_' + Math.random().toString(36).slice(2,7);
+      section = {id:sid, courseId:course.id, number:secNumber, instructorId:instructor.id, semester:'الأول', year:'1447هـ', status:'active'};
+      sectionsMap.set(sid, section);
+      instructor.courseId = course.id;
+      instructor.sectionId = section.id;
+    }
+
     const scores = {};
     CRITERIA.forEach(cr=>{
-      const h = map[cr.key]; let n = h ? toNum(row[h]) : NaN;
-      if(h && (!Number.isFinite(n) || n < 0)) badCells++;
-      if(!Number.isFinite(n) || n < 0) n = 0;
-      scores[cr.key] = n; colMax[cr.key] = Math.max(colMax[cr.key], n);
+      const colKey = map[cr.key];
+      scores[cr.key] = colKey ? toNum(row[colKey]) : 0;
     });
-    if(records.has(sid)) dup++;
-    records.set(sid, {studentId:sid, name, scores});
+
+    studentsList.push({
+      id: uid('stu'),
+      studentId,
+      name,
+      courseId: course.id,
+      sectionId: section.id,
+      level: 'السنة الأولى المشتركة',
+      scores,
+      comment: 'تم الاستيراد تلقائياً من الملف',
+      notes: '',
+      interventions: [],
+      createdAt: daysAgoISO(0)
+    });
   });
-  if(!records.size){ toast('لم يتم العثور على صفوف صالحة (يلزم الرقم الجامعي والاسم).', 'warn'); return; }
-  showImportDialog({fileName:file.name, records:[...records.values()], missingCols, skipped, dup, badCells, colMax});
-}
 
-function showImportDialog(info){
-  const inst = currentInstructor();
-  const secs = inst ? DB.data.sections.filter(s=>s.id===inst.sectionId) : DB.data.sections;
-  if(!secs.length){ toast('لا توجد شعبة لاستيراد الطلبة إليها. أضف شعبة أولًا.', 'error'); return; }
-  let target = inst ? inst.sectionId : ((S.studentFilters.sectionId !== 'all' && secs.find(s=>s.id===S.studentFilters.sectionId)) ? S.studentFilters.sectionId : secs[0].id);
-  let mode = 'merge';
-
-  const ov = document.createElement('div'); ov.className = 'overlay';
-  ov.innerHTML = `<div class="modal modal-lg">
-    <div class="modal-head"><h3 style="margin:0;font-family:Cairo;font-size:16px;">استيراد الطلبة من ملف Excel</h3><button class="icon-btn" id="imp_close">${ICON.x}</button></div>
-    <div class="modal-body" id="imp_body"></div>
-    <div class="modal-foot"><button class="btn btn-outline" id="imp_cancel">إلغاء</button><button class="btn btn-primary" id="imp_ok">${ICON.upload} استيراد</button></div>
-  </div>`;
-  document.body.appendChild(ov);
-  ov.querySelector('#imp_close').onclick = ()=>ov.remove();
-  ov.querySelector('#imp_cancel').onclick = ()=>ov.remove();
-
-  function draw(){
-    const scheme = getScheme(target);
-    const sec = sectionOf(target), crs = courseOf(sec?.courseId);
-    const existing = DB.data.students.filter(s=>s.sectionId===target).length;
-    const chips = [
-      `<span class="tag-pill">${escHtml(info.fileName)}</span>`,
-      `<span class="badge b-green"><span class="dot"></span>${info.records.length} طالبًا صالحًا</span>`,
-      info.skipped ? `<span class="badge b-amber"><span class="dot"></span>${info.skipped} صفوف بلا رقم/اسم تم تجاهلها</span>` : '',
-      info.dup ? `<span class="badge b-amber"><span class="dot"></span>${info.dup} أرقام جامعية مكررة (اعتُمد آخر صف)</span>` : '',
-      info.badCells ? `<span class="badge b-amber"><span class="dot"></span>${info.badCells} خلية فارغة/غير رقمية عُدّت صفرًا</span>` : '',
-    ].join(' ');
-    ov.querySelector('#imp_body').innerHTML = `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">${chips}</div>
-      ${info.missingCols.length ? `<div style="background:var(--amber-bg);color:var(--text);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px;line-height:1.8;">${ICON.alert} أعمدة غير موجودة في الملف وستُعتبر صفرًا لجميع الطلبة: <b>${info.missingCols.join('، ')}</b></div>` : ''}
-      <div class="grid g-2">
-        ${inst ? `<div class="field"><label>الشعبة المستهدفة</label><input type="text" disabled value="${escHtml((crs?crs.name:'')+' — شعبة '+(sec?sec.number:''))}"></div>`
-               : `<div class="field"><label>الشعبة المستهدفة</label><select id="imp_section">${secs.map(s=>`<option value="${s.id}" ${s.id===target?'selected':''}>${(courseOf(s.courseId)||{}).name||''} — شعبة ${s.number}</option>`).join('')}</select></div>`}
-        <div class="field"><label>طريقة الاستيراد</label>
-          <select id="imp_mode">
-            <option value="merge" ${mode==='merge'?'selected':''}>تحديث الموجودين وإضافة الجدد (يحفظ التدخلات والملاحظات)</option>
-            <option value="replace" ${mode==='replace'?'selected':''}>استبدال جميع طلبة الشعبة (${existing} حاليًا)</option>
-          </select></div>
-      </div>
-      <h4 class="font-head" style="font-size:13.5px;margin:6px 0 4px;">الحدود العظمى للمعايير</h4>
-      <p class="table-sub" style="margin:0 0 10px;">هذه الحدود تُحوِّل الدرجات الخام إلى نسب (ويمكن تعديل آلية الحساب لاحقًا من صفحة «معايير التقييم»). تأكد أن إجمالي الساعات والدرجات العظمى صحيحة.</p>
-      <div class="scrollx"><table><thead><tr><th>المعيار</th><th>أعلى قيمة في الملف</th><th>الحد الأعظم المعتمد</th></tr></thead><tbody>
-        ${CRITERIA.map(cr=>{ const cur = scheme.criteria[cr.key].max, fm = info.colMax[cr.key]; const over = fm > cur;
-          return `<tr><td><b>${cr.label}</b><div class="table-sub">${cr.maxLabel}</div></td><td>${fmtN(fm)}${over?` <span class="badge b-amber" style="margin-inline-start:6px;"><span class="dot"></span>أعلى من الحد المعتمد</span>`:''}</td>
-          <td><input type="number" min="0.5" step="0.5" id="imp_max_${cr.key}" value="${cur}" style="max-width:130px;"></td></tr>`; }).join('')}
-      </tbody></table></div>
-      <h4 class="font-head" style="font-size:13.5px;margin:18px 0 8px;">معاينة أول ${Math.min(5, info.records.length)} صفوف</h4>
-      <div class="scrollx"><table><thead><tr>${IMPORT_COLUMNS.map(c=>`<th>${c.label}</th>`).join('')}</tr></thead><tbody>
-        ${info.records.slice(0,5).map(rec=>`<tr><td>${escHtml(rec.studentId)}</td><td>${escHtml(rec.name)}</td>${CRITERIA.map(cr=>`<td>${fmtN(rec.scores[cr.key])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table></div>`;
-    const secSel = ov.querySelector('#imp_section'); if(secSel) secSel.onchange = ()=>{ target = secSel.value; mode = ov.querySelector('#imp_mode').value; draw(); };
-    ov.querySelector('#imp_mode').onchange = e=>{ mode = e.target.value; };
+  if(!studentsList.length){
+    toast('لم يتم العثور على أي بيانات طلاب صالحة للاستيراد.', 'error');
+    return;
   }
-  draw();
 
-  ov.querySelector('#imp_ok').onclick = ()=>{
-    mode = ov.querySelector('#imp_mode').value;
-    const maxes = {}; let bad = false;
-    CRITERIA.forEach(cr=>{ const v = parseFloat(ov.querySelector('#imp_max_'+cr.key).value); maxes[cr.key] = v; if(!(v > 0)) bad = true; });
-    if(bad){ toast('أدخل حدًا أعظم صحيحًا (أكبر من صفر) لكل معيار.', 'error'); return; }
-    const sec = sectionOf(target);
-    const sc = cloneJSON(getScheme(target)); let changed = false;
-    CRITERIA.forEach(cr=>{ if(sc.criteria[cr.key].max !== maxes[cr.key]){ sc.criteria[cr.key].max = maxes[cr.key]; changed = true; } });
-    if(changed) saveScheme(target, sc);
-    if(mode === 'replace') DB.data.students = DB.data.students.filter(s=>s.sectionId !== target);
-    const idx = new Map(DB.data.students.filter(s=>s.sectionId===target).map(s=>[String(s.studentId), s]));
-    let added = 0, updated = 0;
-    info.records.forEach(rec=>{
-      const ex = idx.get(rec.studentId);
-      if(ex){ ex.name = rec.name; ex.scores = rec.scores; updated++; }
-      else { DB.data.students.push({ id:uid('stu'), studentId:rec.studentId, name:rec.name, courseId:sec.courseId, sectionId:target, level:'السنة الأولى المشتركة',
-                scores:rec.scores, comment:'', notes:'', interventions:[], createdAt:daysAgoISO(0) }); added++; }
-    });
-    DB.data.auditLogs.unshift({id:uid('log'), time:daysAgoISO(0), user:S.user.name, action:`استيراد ملف Excel إلى الشعبة ${sec.number} (${added} جديد، ${updated} محدَّث)`});
-    trackUpdate('استيراد ملف Excel', `شعبة ${sec.number}: ${info.records.length} طالب`);
-    if(!currentInstructor()) S.studentFilters.sectionId = target;
-    S.studentPage = 1;
-    DB.save();
-    ov.remove();
-    renderRoute();
-    toast(`تم الاستيراد: ${added} طالبًا جديدًا و${updated} محدَّثًا${changed?' — وتم تحديث الحدود العظمى للمعايير':''}.`);
-  };
+  // تحديث قاعدة البيانات بالكامل بناءً على الملف المدخل
+  DB.data.courses = [...coursesMap.values()];
+  DB.data.instructors = [...instructorsMap.values()];
+  DB.data.sections = [...sectionsMap.values()];
+  DB.data.students = studentsList;
+  DB.data.schemes = {};
+  DB.data.sections.forEach(sec=>{ DB.data.schemes[sec.id] = cloneJSON(DEFAULT_SCHEME); });
+
+  DB.save();
+  render();
+  toast(`تم استيراد ${studentsList.length} طالبًا، وتحديث المقررات والشعب وأسماء المدرسين بنجاح!`);
 }
 
-/* ================================ Cloud Sync + Instructor Update Tracking ================================ */
+function exportStudentsExcel(students){
+  if(!students || !students.length){ toast('لا توجد بيانات طلاب للتصدير.', 'warn'); return; }
+  const rows = students.map(s=>{
+    const c = courseOf(s.courseId), sec = sectionOf(s.sectionId), sc = s.scores || {};
+    const row = {};
+    row['الرقم الجامعي'] = s.studentId ?? '';
+    row['اسم الطالب'] = s.name ?? '';
+    CRITERIA.forEach(cr=>{ row[IMPORT_COLUMNS.find(x=>x.key===cr.key).label] = n0(sc[cr.key]); });
+    row['المقرر'] = c?.name ?? '';
+    row['الشعبة'] = sec?.number ?? '';
+    row['اسم المدرس'] = instructorOf(sec?.instructorId)?.name ?? '';
+    return row;
+  });
+  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة.', 'error'); return; }
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
+  wb.Workbook = { Views:[{RTL:true}] };
+  XLSX.writeFile(wb, `تقرير_معيار_${daysAgoISO(0)}.xlsx`);
+  toast('تم التصدير بنجاح');
+}
+
+function downloadStudentsTemplate(){
+  if(typeof XLSX === 'undefined'){ toast('مكتبة Excel غير متاحة.', 'error'); return; }
+  const headers = IMPORT_COLUMNS.map(c=>c.label);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ['2044001','عبدالله محمد',26,9,13,8,24,17,'د. سلطان العتيبي','كيمياء عامة','101']]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الطلبة');
+  wb.Workbook = { Views:[{RTL:true}] };
+  XLSX.writeFile(wb, 'قالب_استيراد_الطلبة.xlsx');
+}
+
+function wirePageEvents(){
+  document.querySelectorAll('#content [data-nav]').forEach(el=> el.onclick = ()=> go(el.getAttribute('data-nav')));
+  document.querySelectorAll('[data-student]').forEach(el=> el.onclick = ()=> openStudentDetail(el.getAttribute('data-student')));
+
+  const importBtn = document.getElementById('importExcelBtn');
+  const fileInput = document.getElementById('excelFileInput');
+  if(importBtn && fileInput){
+    importBtn.onclick = (e)=>{ e.preventDefault(); fileInput.click(); };
+    fileInput.onchange = (e)=>{ const file = e.target.files[0]; if(file) startExcelImport(file); fileInput.value = ''; };
+  }
+  const tplBtn = document.getElementById('downloadTemplateBtn'); if(tplBtn) tplBtn.onclick=(e)=>{ e.preventDefault(); downloadStudentsTemplate(); };
+  const exportBtn = document.getElementById('exportStudentsBtn'); if(exportBtn) exportBtn.onclick=(e)=>{ e.preventDefault(); exportStudentsExcel(scopedStudents()); };
+  const stuSearch=document.getElementById('stuSearch'); if(stuSearch) stuSearch.oninput=()=>{ S.studentFilters.q=stuSearch.value; S.studentPage=1; renderRoute(); };
+}
+
 const SYNC = {
-  url:'https://YOUR-PROJECT-default-rtdb.firebaseio.com',   // <-- put your Firebase URL here
-  ready:false, timer:null, lastHash:'',
-  on(){ return !!this.url && !this.url.includes('https://mayar-91252-default-rtdb.firebaseio.com/'); },
-  async req(path, method, body){
-    const r = await fetch(this.url + path + '.json', {
-      method, headers:{'Content-Type':'application/json'},
-      body: body===undefined ? undefined : JSON.stringify(body)
-    });
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return r.json();
-  },
-  schedulePush(){
-    if(!this.on() || !S.user) return;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(()=> this.push().catch(e=>console.error('sync push',e)), 600);
-  },
-  async push(){
-    const d = DB.data;
-    if(S.user.role==='admin'){
-      const bySec = {};
-      d.students.forEach(s=>{ (bySec[s.sectionId] = bySec[s.sectionId] || []).push(s); });
-      await this.req('/base','PUT',{
-        courses:d.courses, sections:d.sections, instructors:d.instructors,
-        users:d.users, settings:d.settings, auditLogs:d.auditLogs.slice(0,100)
-      });
-      await this.req('/students','PUT',bySec);
-      await this.req('/schemes','PUT',d.schemes||{});
-      this.ready = true;
-    } else if(this.ready){
-      const inst = currentInstructor(); if(!inst) return;
-      await this.req('/students/'+inst.sectionId,'PUT', d.students.filter(s=>s.sectionId===inst.sectionId));
-      if(d.schemes && d.schemes[inst.sectionId]) await this.req('/schemes/'+inst.sectionId,'PUT', d.schemes[inst.sectionId]);
-    }
-  },
-  async pull(){
-    if(!this.on()) return false;
-    const all = await this.req('','GET');
-    if(!all || !all.base){ this.ready = false; return false; }
-    const h = JSON.stringify(all);
-    this.ready = true;
-    if(h === this.lastHash) return false;
-    this.lastHash = h;
-    const b = all.base, d = DB.data;
-    ['courses','sections','instructors','users'].forEach(k=> d[k] = Object.values(b[k]||{}));
-    d.settings = b.settings || d.settings;
-    d.auditLogs = Object.values(b.auditLogs||{});
-    if(all.schemes) d.schemes = all.schemes;
-    d.students = Object.values(all.students||{}).flatMap(a=> Object.values(a||{})).map(s=>{
-      s.interventions = Object.values(s.interventions||{});
-      ensureScores(s);
-      return s;
-    });
-    d.updates = Object.values(all.updates||{}).sort((a,b)=> b.time.localeCompare(a.time)).slice(0,300);
-    try{ localStorage.setItem(DB.KEY, JSON.stringify(d)); }catch(e){}
-    if(S.user){ S.user = d.users.find(u=>u.id===S.user.id) || S.user; }
-    return true;
-  }
+  url:'',
+  on(){ return false; },
+  schedulePush(){},
+  async pull(){ return false; }
 };
 
-function trackUpdate(action, target){
-  const inst = currentInstructor(); if(!inst) return;
-  const e = { id:uid('upd'), time:new Date().toISOString(), instructorId:inst.id, instructorName:inst.name,
-              courseId:inst.courseId, sectionId:inst.sectionId, action, target:target||'' };
-  DB.data.updates = DB.data.updates || [];
-  DB.data.updates.unshift(e);
-  if(SYNC.on()) SYNC.req('/updates','POST',e).catch(err=>console.error('track',err));
-}
-
-function fmtDateTime(iso){
-  try{ return new Date(iso).toLocaleString('ar-SA',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ return iso; }
-}
-
-function instructorUpdatesCard(){
-  const ups = DB.data.updates || [];
-  const rows = DB.data.instructors.map(i=>{
-    const mine = ups.filter(u=>u.instructorId===i.id);
-    return { i, c:courseOf(i.courseId), sec:sectionOf(i.sectionId), last:mine[0], n:mine.length,
-             stu:DB.data.students.filter(s=>s.sectionId===i.sectionId).length };
-  });
-  return `<div class="card" style="padding:18px;margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
-      <h3 class="font-head" style="margin:0;font-size:15px;">آخر تحديثات بيانات المدرسين (inst)</h3>
-      <span class="badge ${SYNC.on()?'b-green':'b-amber'}"><span class="dot"></span>${SYNC.on()?'مزامنة سحابية مفعّلة':'المزامنة غير مفعّلة'}</span>
-    </div>
-    <div class="scrollx"><table class="responsive-cards">
-      <thead><tr><th>المدرس</th><th>المقرر / الشعبة</th><th>عدد الطلبة</th><th>آخر تحديث</th><th>آخر عملية</th><th>عدد التحديثات</th></tr></thead>
-      <tbody>${rows.map(({i,c,sec,last,n,stu})=>`<tr style="cursor:default;">
-        <td data-label="المدرس"><div class="table-name">${i.name}</div><div class="table-sub">${i.username}</div></td>
-        <td data-label="المقرر">${c?c.name:''} — ${sec?sec.number:''}</td>
-        <td data-label="الطلبة">${stu}</td>
-        <td data-label="آخر تحديث">${last?fmtDateTime(last.time):'<span class="table-sub">لا يوجد</span>'}</td>
-        <td data-label="آخر عملية">${last?(last.action+(last.target?' — '+last.target:'')):'—'}</td>
-        <td data-label="التحديثات">${n}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-    ${ups.length?`<div class="divider"></div>
-    <div style="font-weight:700;font-size:13px;margin-bottom:6px;">أحدث العمليات</div>
-    ${ups.slice(0,8).map(u=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-      <span><b>${u.instructorName}</b> — ${u.action}${u.target?': '+u.target:''}</span>
-      <span class="table-sub">${fmtDateTime(u.time)}</span></div>`).join('')}`:''}
-  </div>`;
-}
-
-/* auto-refresh every 20s (skips if a form/modal is open or the user is typing) */
-setInterval(async ()=>{
-  if(!S.user || !SYNC.on()) return;
-  if(document.querySelector('.overlay')) return;
-  const a = document.activeElement;
-  if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
-  try{ if(await SYNC.pull()) renderRoute(); }catch(e){ console.error('sync pull',e); }
-}, 20000);
-
-/* ================================ Boot ================================ */
 DB.load();
 render();
-SYNC.pull().then(changed=>{ if(changed) render(); }).catch(e=>console.error('sync pull',e));
 </script>
 </body>
 </html>
