@@ -246,7 +246,7 @@ textarea{resize:vertical;min-height:76px;}
 .mono{font-family:ui-monospace,Consolas,monospace;direction:ltr;text-align:left;}
 .scheme-table td,.scheme-table th{vertical-align:top;}
 
-@print{
+@media print{
   .sidebar,.topbar,.no-print,.page-head,.breadcrumb,.mobile-scrim,#toastWrap{display:none !important;}
   .shell,.main{display:block !important;}
   .content{padding:0 !important;}
@@ -317,7 +317,7 @@ function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
 
 /* ================================ DB (local) ================================ */
 const DB = {
-  KEY:'miyar_academic_perf_v8',
+  KEY:'miyar_academic_perf_v7',
   data:null,
   load(){
     try{
@@ -348,10 +348,10 @@ const DEFAULT_SETTINGS = {
 
 /* ================================ Evaluation scheme (dynamic criteria) ================================ */
 const CRITERIA = [
-  {key:'attendance', label:'الحضور',        raw:'عدد ساعات الحضور',    unit:'ساعة',  maxLabel:'إجمالي ساعات المقرر'},
-  {key:'activities', label:'الأنشطة',        raw:'درجة الأنشطة',        unit:'درجة', maxLabel:'الدرجة العظمى للأنشطة'},
+  {key:'attendance', label:'الحضور',          raw:'عدد ساعات الحضور',    unit:'ساعة',  maxLabel:'إجمالي ساعات المقرر'},
+  {key:'activities', label:'الأنشطة',         raw:'درجة الأنشطة',        unit:'درجة', maxLabel:'الدرجة العظمى للأنشطة'},
   {key:'exercises',  label:'التمارين',        raw:'درجة التمارين',       unit:'درجة', maxLabel:'الدرجة العظمى للتمارين'},
-  {key:'homework',   label:'الواجب الورقي',    raw:'درجة الواجب الورقي',   unit:'درجة', maxLabel:'الدرجة العظمى للواجب الورقي'},
+  {key:'homework',   label:'الواجب الورقي',   raw:'درجة الواجب الورقي',  unit:'درجة', maxLabel:'الدرجة العظمى للواجب الورقي'},
   {key:'midterm',    label:'اختبار المنتصف',  raw:'درجة المنتصف',        unit:'درجة', maxLabel:'الدرجة العظمى لاختبار المنتصف'},
   {key:'evaluation', label:'تقييم المدرس',    raw:'تقييم المدرس',        unit:'درجة', maxLabel:'الدرجة العظمى لتقييم المدرس'},
 ];
@@ -391,6 +391,8 @@ function compileFormula(src){
   const allowed = new Set(['x','m','w','p', ...Object.keys(FORMULA_FUNCS)]);
   for(const id of (s.match(/[A-Za-z_]\w*/g) || [])){ if(!allowed.has(id)) throw new Error('رمز غير مسموح في المعادلة: '+id); }
   if(/[^0-9A-Za-z_+\-*/%().,<>=!&|?:\s]/.test(s)) throw new Error('المعادلة تحتوي على رموز غير مسموحة');
+  if(/[^0-9]\.|\.[^0-9]/.test(s)) throw new Error('صيغة الأرقام العشرية غير صحيحة');
+  if(s.replace(/===|!==|==|!=|<=|>=/g,'').includes('=')) throw new Error('علامة = غير مسموحة (استخدم == للمقارنة)');
   let fn;
   try{ fn = new Function('x','m','w','p','F','"use strict"; const {min,max,sqrt,abs,round,floor,ceil,pow,iff}=F; return ('+s+');'); }
   catch(e){ throw new Error('صيغة المعادلة غير صحيحة'); }
@@ -443,16 +445,16 @@ function describeCriterion(c){
   let lines = [];
   switch(c.method){
     case 'cap':
-      lines = [`درجة كاملة (${w}) عند بلوغ ${fmtN(c.capPct)}% من ${m}، وتناسبيًا قبل ذلك`]; break;
+      lines = [`درجة كاملة (${w}) عند بلوغ ${fmtN(c.capPct)}% من ${m}، وتناسبيًا قبل ذلك: (الدرجة ÷ (${m} × ${fmtN(c.capPct)}%)) × ${w}`]; break;
     case 'bands': {
       const bs = (Array.isArray(c.bands)? c.bands : []).slice().sort((a,b)=>n0(b.min)-n0(a.min));
-      lines = bs.map(b=>`إذا بلغت النسبة ≥ ${fmtN(b.min)}% من ${m} ← ${fmtN(b.pct)}% من الوزن`);
+      lines = bs.map(b=>`إذا بلغت النسبة ≥ ${fmtN(b.min)}% من ${m} ← ${fmtN(b.pct)}% من الوزن (${fmtN(n0(c.weight)*n0(b.pct)/100)})`);
       if(!lines.length) lines = ['لا توجد شرائح معرّفة']; break;
     }
     case 'deduct':
       lines = [`${w} − ((${m} − الدرجة) × ${fmtN(c.perUnit)})، وبحدّ أدنى صفر`]; break;
     case 'custom':
-      lines = [`المعادلة: ${c.formula}`]; break;
+      lines = [`المعادلة: ${c.formula}  (x = الدرجة الخام، m = الحد الأعظم ${m}، w = الوزن ${w}، p = x ÷ m)`]; break;
     default:
       lines = [`(الدرجة ÷ ${m}) × ${w}`];
   }
@@ -577,6 +579,11 @@ function seedData(){
 
   const schemes = {};
   sections.forEach(sec=>{ schemes[sec.id] = cloneJSON(DEFAULT_SCHEME); });
+  if(sections[2]){
+    const demo = schemes[sections[2].id].criteria;
+    demo.attendance.method = 'bands';
+    demo.exercises.method = 'cap'; demo.exercises.capPct = 85;
+  }
 
   const users = [
     {id:'admin1', name:'إدارة النظام', username:'admin', password:'admin123', role:'admin', email:'admin@ksu.edu.sa', status:'active', lastLogin: daysAgoISO(0)},
@@ -585,12 +592,16 @@ function seedData(){
 
   const auditLogs = [
     {id:uid('log'),time:daysAgoISO(0),user:'إدارة النظام',action:'تسجيل الدخول إلى لوحة الإدارة'},
+    {id:uid('log'),time:daysAgoISO(0),user:instructors[0].name,action:'تحديث بيانات طالب في الشعبة '+sections[0].number},
+    {id:uid('log'),time:daysAgoISO(1),user:instructors[2].name,action:'إدخال درجات اختبار المنتصف'},
+    {id:uid('log'),time:daysAgoISO(2),user:'إدارة النظام',action:'إضافة شعبة جديدة للمقرر '+courses[1].name},
+    {id:uid('log'),time:daysAgoISO(3),user:instructors[4].name,action:'تسجيل تدخل أكاديمي لطالب'},
   ];
 
   return {
     courses, sections, instructors, students, users, auditLogs, schemes,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
-    meta:{ version:'4.1.0', seededAt: new Date().toISOString() }
+    meta:{ version:'4.0.0', seededAt: new Date().toISOString() }
   };
 }
 function weightedPick(pairs){ const r=rnd(); let acc=0; for(const [k,w] of pairs){acc+=w; if(r<=acc) return k;} return pairs[pairs.length-1][0]; }
@@ -1182,7 +1193,7 @@ function afterRouteRender(){
   }
 }
 
-/* ================================ Excel Import & Export (مع دعم اسم المدرس وإعادة التهيئة) ================================ */
+/* ================================ Excel Import & Export (مع دعم اسم المدرس وإعادة التهيئة الشاملة) ================================ */
 const IMPORT_COLUMNS = [
   {key:'studentId',  label:'الرقم الجامعي',     aliases:['الرقم الجامعي','الرقم الاكاديمي','رقم الطالب','الرقم','student id','studentid','id']},
   {key:'name',       label:'اسم الطالب',        aliases:['اسم الطالب','الاسم','اسم','student name','studentname','name']},
@@ -1244,7 +1255,7 @@ async function startExcelImport(file){
   const instructorsMap = new Map();
   const studentsList = [];
 
-  rows.forEach((row, idx)=>{
+  rows.forEach((row)=>{
     const studentId = normStudentId(row[map.studentId]);
     const name = String(row[map.name] || '').trim();
     if(!studentId || !name) return;
@@ -1302,7 +1313,6 @@ async function startExcelImport(file){
     return;
   }
 
-  // تحديث قاعدة البيانات بالكامل بناءً على الملف المدخل
   DB.data.courses = [...coursesMap.values()];
   DB.data.instructors = [...instructorsMap.values()];
   DB.data.sections = [...sectionsMap.values()];
